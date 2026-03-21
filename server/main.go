@@ -54,9 +54,11 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	loginRate := middleware.LoginRateLimit()
+
 	// ── Auth (always public) ─────────────────────────────────────
-	mux.HandleFunc("/api/auth/register", public(handlers.RegisterHandler(cfg.JWTSecret, cfg.JWTExpiry)))
-	mux.HandleFunc("/api/auth/login", public(handlers.LoginHandler(cfg.JWTSecret, cfg.JWTExpiry)))
+	mux.HandleFunc("/api/auth/register", cors(loginRate(handlers.RegisterHandler(cfg.JWTSecret, cfg.JWTExpiry))))
+	mux.HandleFunc("/api/auth/login", cors(loginRate(handlers.LoginHandler(cfg.JWTSecret, cfg.JWTExpiry))))
 	mux.HandleFunc("/api/auth/me", protect(handlers.MeHandler))
 	mux.HandleFunc("/api/auth/setup-status", public(handlers.SetupStatusHandler(cfg.AuthEnabled)))
 
@@ -155,6 +157,14 @@ func main() {
 	mux.HandleFunc("/api/gdrive/bucket/metadata", protect(handlers.GetGDriveMetadata))
 	mux.HandleFunc("/api/gdrive/bucket/metadata/update", protect(handlers.UpdateGDriveMetadata))
 
+	// ── Folder creation ─────────────────────────────────────────
+	mux.HandleFunc("/api/gcp/bucket/create-folder", protect(handlers.CreateFolderGCP))
+	mux.HandleFunc("/api/aws/bucket/create-folder", protect(handlers.CreateFolderAWS))
+	mux.HandleFunc("/api/huawei/bucket/create-folder", protect(handlers.CreateFolderHuawei))
+	mux.HandleFunc("/api/alibaba/bucket/create-folder", protect(handlers.CreateFolderAlibaba))
+	mux.HandleFunc("/api/azure/bucket/create-folder", protect(handlers.CreateFolderAzure))
+	mux.HandleFunc("/api/gdrive/bucket/create-folder", protect(handlers.CreateFolderGDrive))
+
 	// ── Background jobs ─────────────────────────────────────────
 	mux.HandleFunc("/api/jobs", protect(handlers.JobsRoute))  // POST=CreateJob, GET=ListJobs
 	mux.HandleFunc("/api/jobs/", protect(handlers.GetJob))    // GET /api/jobs/{id}
@@ -164,6 +174,7 @@ func main() {
 
 	// ── Cross-connection transfer ────────────────────────────────
 	mux.HandleFunc("/api/transfer", protect(handlers.TransferObject))
+	mux.HandleFunc("/api/transfer/progress", protect(handlers.TransferProgress))
 
 	// ── Zip download ─────────────────────────────────────────────
 	mux.HandleFunc("/api/zip", protect(handlers.ZipObjects))

@@ -33,8 +33,12 @@ func testGDrive(folderID, credentialsJSON string) error {
 		return err
 	}
 
+<<<<<<< HEAD
 	// Try to get the folder metadata
 	f, err := srv.Files.Get(folderID).Fields("id, name, mimeType").SupportsAllDrives(true).Context(ctx).Do()
+=======
+	f, err := srv.Files.Get(folderID).Fields("id, name, mimeType").Context(ctx).Do()
+>>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 	if err != nil {
 		return fmt.Errorf("folder not accessible: %v", err)
 	}
@@ -57,22 +61,20 @@ func ListGDrive(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type GDriveConnection struct {
-		ID          int64     `json:"id"`
-		Name        string    `json:"name"`
-		Bucket      string    `json:"bucket"`
-		Credentials string    `json:"credentials"`
-		CreatedAt   time.Time `json:"created_at"`
+		ID        int64     `json:"id"`
+		Name      string    `json:"name"`
+		Bucket    string    `json:"bucket"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 
 	conns := []GDriveConnection{}
 	for rows.Next() {
 		var c GDriveConnection
-		var created string
-		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &c.Credentials, &created); err != nil {
+		var created, creds string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &creds, &created); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		c.Credentials, _ = decryptCredentials(c.Credentials)
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		conns = append(conns, c)
 	}
@@ -86,16 +88,16 @@ func CreateGDrive(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testGDrive(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -104,12 +106,11 @@ func CreateGDrive(w http.ResponseWriter, r *http.Request) {
 		req.Name, req.Bucket, encrypted, now,
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id, _ := res.LastInsertId()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+	jsonOK(w, map[string]any{"id": id})
 }
 
 // GDriveConnByID handles both DELETE and PUT for /api/gdrive/connection/{id}.
@@ -120,23 +121,23 @@ func GDriveConnByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		UpdateGDriveConn(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func DeleteGDriveConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	if _, err = appdb.DB.Exec("DELETE FROM gdrive_connections WHERE id = ?", id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -145,12 +146,12 @@ func DeleteGDriveConn(w http.ResponseWriter, r *http.Request) {
 func UpdateGDriveConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	var req struct {
@@ -159,23 +160,23 @@ func UpdateGDriveConn(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testGDrive(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	if _, err := appdb.DB.Exec(
 		"UPDATE gdrive_connections SET name=?, bucket=?, credentials=? WHERE id=?",
 		req.Name, req.Bucket, encrypted, id,
 	); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -187,15 +188,14 @@ func TestGDrive(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testGDrive(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // ── file operations ───────────────────────────────────────────────
@@ -210,7 +210,7 @@ type gdriveEntry struct {
 
 // resolveParentID resolves a "prefix" path to a Drive folder ID.
 // The "prefix" uses forward-slash-separated folder names relative to the root folder.
-// For example, prefix "photos/2024/" means: rootFolder → "photos" subfolder → "2024" subfolder.
+// For example, prefix "photos/2024/" means: rootFolder -> "photos" subfolder -> "2024" subfolder.
 // If prefix is empty, it returns the root folder ID.
 func resolveParentID(ctx context.Context, srv *drive.Service, rootID, prefix string) (string, error) {
 	if prefix == "" {
@@ -241,28 +241,35 @@ func resolveParentID(ctx context.Context, srv *drive.Service, rootID, prefix str
 // BrowseGDriveBucket lists entries (files + folders) in a given parent folder with pagination.
 func BrowseGDriveBucket(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
-		PageToken   string `json:"page_token"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		PageToken    string `json:"page_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	folderID, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	parentID, err := resolveParentID(ctx, srv, req.Bucket, req.Prefix)
+	parentID, err := resolveParentID(ctx, srv, folderID, req.Prefix)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -279,7 +286,7 @@ func BrowseGDriveBucket(w http.ResponseWriter, r *http.Request) {
 
 	result, err := call.Context(ctx).Do()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -297,8 +304,6 @@ func BrowseGDriveBucket(w http.ResponseWriter, r *http.Request) {
 			if f.ModifiedTime != "" {
 				updated, _ = time.Parse(time.RFC3339, f.ModifiedTime)
 			}
-			// Name stores "prefix + fileID" so the backend can look up files by ID later.
-			// Display shows the human-readable filename.
 			entries = append(entries, gdriveEntry{
 				Type:    "file",
 				Name:    req.Prefix + f.Id,
@@ -309,8 +314,7 @@ func BrowseGDriveBucket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"prefix":          req.Prefix,
 		"entries":         entries,
 		"next_page_token": result.NextPageToken,
@@ -320,20 +324,27 @@ func BrowseGDriveBucket(w http.ResponseWriter, r *http.Request) {
 // ListGDriveObjects is kept for backward compat (flat listing).
 func ListGDriveObjects(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	folderID, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -348,7 +359,7 @@ func ListGDriveObjects(w http.ResponseWriter, r *http.Request) {
 	var pageToken string
 
 	for len(objects) < maxResults {
-		q := fmt.Sprintf("'%s' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'", req.Bucket)
+		q := fmt.Sprintf("'%s' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'", folderID)
 		call := srv.Files.List().Q(q).
 			Fields("nextPageToken, files(id, name, size, modifiedTime)").
 			PageSize(200).
@@ -383,8 +394,7 @@ func ListGDriveObjects(w http.ResponseWriter, r *http.Request) {
 	if objects == nil {
 		objects = []gdriveObject{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"objects":   objects,
 		"truncated": len(objects) == maxResults,
 	})
@@ -402,30 +412,41 @@ func extractFileID(name string) string {
 // GDriveDownloadURL returns a download URL for a Google Drive file.
 func GDriveDownloadURL(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	fileID := extractFileID(req.Object)
 
+<<<<<<< HEAD
 	// Get file metadata to check if it's a Google Workspace file
 	f, err := srv.Files.Get(fileID).Fields("id, name, mimeType, webContentLink").SupportsAllDrives(true).Context(ctx).Do()
+=======
+	f, err := srv.Files.Get(fileID).Fields("id, name, mimeType, webContentLink").Context(ctx).Do()
+>>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -433,41 +454,50 @@ func GDriveDownloadURL(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(f.MimeType, "application/vnd.google-apps.") {
 		exportMime := "application/pdf"
 		url := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s/export?mimeType=%s", fileID, exportMime)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
+		jsonOK(w, map[string]string{"url": url})
 		return
 	}
 
-	// For regular files, use the direct download link
 	url := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
+	jsonOK(w, map[string]string{"url": url})
 }
 
 // DeleteGDriveObject deletes a single Google Drive file.
 func DeleteGDriveObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	fileID := extractFileID(req.Object)
+<<<<<<< HEAD
 	if err := srv.Files.Delete(fileID).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+=======
+	if err := srv.Files.Delete(fileID).Context(ctx).Do(); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+>>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -476,47 +506,60 @@ func DeleteGDriveObject(w http.ResponseWriter, r *http.Request) {
 // CopyGDriveObject copies (and optionally deletes) a Google Drive file — used for rename/move.
 func CopyGDriveObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
-		Delete      bool   `json:"delete_source"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Source       string `json:"source"`
+		Destination  string `json:"destination"`
+		Delete       bool   `json:"delete_source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	sourceID := extractFileID(req.Source)
 
-	// For rename: just update the file name via Files.Update
-	// Extract the desired new name from the destination
 	newName := req.Destination
 	if i := strings.LastIndex(newName, "/"); i >= 0 {
 		newName = newName[i+1:]
 	}
 
 	if req.Delete {
-		// Rename = update the file name in-place
 		update := &drive.File{Name: newName}
+<<<<<<< HEAD
 		if _, err := srv.Files.Update(sourceID, update).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+=======
+		if _, err := srv.Files.Update(sourceID, update).Context(ctx).Do(); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+>>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 			return
 		}
 	} else {
-		// Pure copy: copy the file with a new name
 		copyFile := &drive.File{Name: newName}
+<<<<<<< HEAD
 		if _, err := srv.Files.Copy(sourceID, copyFile).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+=======
+		if _, err := srv.Files.Copy(sourceID, copyFile).Context(ctx).Do(); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+>>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 			return
 		}
 	}
@@ -527,17 +570,29 @@ func CopyGDriveObject(w http.ResponseWriter, r *http.Request) {
 // UploadGDriveObject uploads a file to Google Drive via multipart form.
 func UploadGDriveObject(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	folderID := r.FormValue("bucket")
-	creds := r.FormValue("credentials")
+	connIDStr := r.FormValue("connection_id")
+	folderIDVal := r.FormValue("bucket")
+	credsVal := r.FormValue("credentials")
 	prefix := r.FormValue("prefix")
+
+	var connID int64
+	if connIDStr != "" {
+		connID, _ = strconv.ParseInt(connIDStr, 10, 64)
+	}
+
+	folderID, creds, err := resolveProviderCreds("gdrive", connID, folderIDVal, credsVal)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -547,14 +602,13 @@ func UploadGDriveObject(w http.ResponseWriter, r *http.Request) {
 
 	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Resolve the target parent folder
 	parentID, err := resolveParentID(ctx, srv, folderID, prefix)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -571,21 +625,18 @@ func UploadGDriveObject(w http.ResponseWriter, r *http.Request) {
 
 	created, err := srv.Files.Create(driveFile).SupportsAllDrives(true).Media(file).Context(ctx).Do()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"name": created.Name})
+	jsonOK(w, map[string]string{"name": created.Name})
 }
 
 // GDriveBucketStats — Google Drive does not support efficient aggregate stats.
 func GDriveBucketStats(w http.ResponseWriter, r *http.Request) {
-	// Drain the request body so connections can be reused
 	io.Copy(io.Discard, r.Body)
 	r.Body.Close()
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"object_count": 0,
 		"total_size":   0,
 		"truncated":    false,
@@ -596,21 +647,28 @@ func GDriveBucketStats(w http.ResponseWriter, r *http.Request) {
 // GetGDriveMetadata returns metadata for a Google Drive file.
 func GetGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -620,7 +678,7 @@ func GetGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 		SupportsAllDrives(true).
 		Context(ctx).Do()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -637,8 +695,7 @@ func GetGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 		md["web_view_link"] = f.WebViewLink
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"content_type":  f.MimeType,
 		"cache_control": "",
 		"metadata":      md,
@@ -652,6 +709,7 @@ func GetGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 // UpdateGDriveMetadata patches description on a Google Drive file.
 func UpdateGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		ConnectionID int64             `json:"connection_id"`
 		Bucket       string            `json:"bucket"`
 		Credentials  string            `json:"credentials"`
 		Object       string            `json:"object"`
@@ -660,16 +718,22 @@ func UpdateGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	srv, err := gdriveService(ctx, req.Credentials)
+	srv, err := gdriveService(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -679,14 +743,75 @@ func UpdateGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 	if desc, ok := req.Metadata["description"]; ok {
 		update.Description = desc
 	}
-	// MimeType can also be updated (for non-Google Workspace files)
 	if req.ContentType != "" {
 		update.MimeType = req.ContentType
 	}
 
+<<<<<<< HEAD
 	if _, err := srv.Files.Update(fileID, update).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+=======
+	if _, err := srv.Files.Update(fileID, update).Context(ctx).Do(); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+>>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// CreateFolderGDrive creates a folder via the Drive API.
+func CreateFolderGDrive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		Name         string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	folderID, creds, err := resolveProviderCreds("gdrive", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		jsonError(w, "folder name is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	srv, err := gdriveService(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	parentID, err := resolveParentID(ctx, srv, folderID, req.Prefix)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	driveFile := &drive.File{
+		Name:     strings.TrimSuffix(req.Name, "/"),
+		Parents:  []string{parentID},
+		MimeType: "application/vnd.google-apps.folder",
+	}
+	created, err := srv.Files.Create(driveFile).Context(ctx).Do()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"name": req.Prefix + created.Name + "/"})
 }

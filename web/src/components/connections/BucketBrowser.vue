@@ -187,7 +187,7 @@
             <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
             <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
           </svg>
-          {{ isCrossTarget ? 'Drop to copy here' : 'Drop to upload here' }}
+          {{ isCrossTarget ? (dragOverEntry ? `Drop into "${dragOverEntry.display}"` : 'Drop to copy here') : 'Drop to upload here' }}
         </div>
       </div>
 
@@ -226,9 +226,14 @@
           v-for="(entry, entryIdx) in filteredEntries"
           :key="entry.name"
           class="file-card"
-          :class="{ 'is-dir': entry.type === 'dir', 'is-selected': selected.has(entry.name), 'is-focused': entryIdx === focusedIdx }"
+          :class="{ 'is-dir': entry.type === 'dir', 'is-selected': selected.has(entry.name), 'is-focused': entryIdx === focusedIdx, 'is-drop-target': dragOverEntry?.name === entry.name && isCrossTarget }"
           @mouseenter="focusedIdx = entryIdx"
           @click="entry.type === 'dir' ? navigateTo(entry.name) : openPreview(entry)"
+          :draggable="entry.type === 'file'"
+          @dragstart="onRowDragStart($event, entry)"
+          @dragend="onRowDragEnd"
+          @dragover="isCrossTarget && entry.type === 'dir' ? onEntryDragOver($event, entry) : null"
+          @dragleave.self="onEntryDragLeave(entry)"
         >
           <div class="file-card__thumb">
             <img v-if="isImage(entry) && entry.url" :src="entry.url" class="file-card__img" :alt="entry.display || 'thumbnail'" />
@@ -300,11 +305,13 @@
             v-for="(entry, entryIdx) in filteredEntries"
             :key="entry.name"
             class="file-row"
-            :class="{ 'is-dir': entry.type === 'dir', 'is-selected': selected.has(entry.name), 'is-focused': entryIdx === focusedIdx }"
+            :class="{ 'is-dir': entry.type === 'dir', 'is-selected': selected.has(entry.name), 'is-focused': entryIdx === focusedIdx, 'is-drop-target': dragOverEntry?.name === entry.name && isCrossTarget }"
             @mouseenter="focusedIdx = entryIdx"
             :draggable="entry.type === 'file'"
             @dragstart="onRowDragStart($event, entry)"
             @dragend="onRowDragEnd"
+            @dragover="isCrossTarget && entry.type === 'dir' ? onEntryDragOver($event, entry) : null"
+            @dragleave.self="onEntryDragLeave(entry)"
           >
             <td class="col-check">
               <input v-if="entry.type === 'file'" type="checkbox" :checked="selected.has(entry.name)" @change="toggleSelect(entry.name)" />
@@ -852,6 +859,49 @@
       </template>
     </BaseModal>
 
+    <!-- Transfer progress modal -->
+    <BaseModal :open="showProgressModal" title="Transferring…" @update:open="showProgressModal = false">
+      <div v-if="transferProgress" style="display:flex;flex-direction:column;gap:14px">
+        <div style="font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:var(--accent)">
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+          <span style="word-break:break-all">{{ transferProgress.filename }}</span>
+        </div>
+
+        <!-- Progress bar -->
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px">
+            <span>{{ transferProgress.error ? 'Failed' : transferProgress.done ? 'Complete' : transferProgress.total > 0 ? 'Downloading…' : 'Preparing…' }}</span>
+            <span v-if="transferProgress.total > 0">
+              {{ formatSize(transferProgress.loaded) }} / {{ formatSize(transferProgress.total) }}
+            </span>
+          </div>
+          <div style="height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden">
+            <div :style="{
+              width: transferProgress.error ? '100%' : transferProgress.done ? '100%' : transferProgress.total > 0 ? `${Math.round(transferProgress.loaded / transferProgress.total * 100)}%` : '30%',
+              height: '100%',
+              borderRadius: '3px',
+              background: transferProgress.error ? 'var(--danger)' : transferProgress.done ? 'var(--success,#22c55e)' : 'var(--accent)',
+              transition: 'width .3s ease',
+              animation: (!transferProgress.done && transferProgress.total <= 0) ? 'pulse-progress 1.4s ease-in-out infinite' : 'none'
+            }" />
+          </div>
+          <div v-if="transferProgress.total > 0 && !transferProgress.done && !transferProgress.error"
+               style="text-align:right;font-size:11px;color:var(--muted);margin-top:4px">
+            {{ Math.round(transferProgress.loaded / transferProgress.total * 100) }}%
+          </div>
+        </div>
+
+        <div v-if="transferProgress.error" style="font-size:12px;color:var(--danger)">{{ transferProgress.error }}</div>
+      </div>
+      <template #footer>
+        <button class="base-btn base-btn--ghost" @click="showProgressModal = false" style="font-size:12px;padding:5px 10px">
+          {{ transferProgress?.done ? 'Close' : 'Hide' }}
+        </button>
+      </template>
+    </BaseModal>
+
     <!-- CLI command modal -->
     <BaseModal :open="showCliModal" :title="`CLI — ${cliEntry?.display ?? ''}`" @update:open="showCliModal = false">
       <div v-if="cliEntry" style="display:flex;flex-direction:column;gap:12px">
@@ -900,7 +950,7 @@ const props = defineProps({
 })
 defineEmits(['delete'])
 
-const { browseObjects, getDownloadURL, proxyDownload, presignUrl, zipDownload, deleteObject, copyObject, uploadObjects, uploadObjectWithProgress, deletePrefix, transferObject, getBucketStats, getObjectMetadata, updateObjectMetadata } = useConnections()
+const { browseObjects, getDownloadURL, proxyDownload, presignUrl, zipDownload, deleteObject, copyObject, uploadObjects, uploadObjectWithProgress, deletePrefix, transferObject, watchTransferProgress, getBucketStats, getObjectMetadata, updateObjectMetadata, createFolder: createFolderApi } = useConnections()
 const toast   = useToast()
 const confirm = useConfirm()
 const { isBookmarked, toggleBookmark }            = useBookmarks()
@@ -981,6 +1031,10 @@ const otherConnections  = computed(() => props.connections.filter(
   c => !(c.provider === props.conn.provider && c.id === props.conn.id)
 ))
 
+// ── Transfer progress ────────────────────────────────────────────
+const transferProgress  = ref(null)  // { filename, loaded, total, done, error }
+const showProgressModal = ref(false)
+
 // ── Metadata editor ─────────────────────────────────────────────
 const metaEntry   = ref(null)
 const metaData    = ref(null)
@@ -1040,6 +1094,7 @@ function toggleCurrentBookmark() {
 const isCrossTarget = computed(() =>
   dragState.value !== null && dragState.value.paneId !== props.paneId
 )
+const dragOverEntry = ref(null) // folder being hovered during cross-pane drag
 
 // ── Keyboard navigation ─────────────────────────────────────────
 const focusedIdx = ref(-1)
@@ -1105,7 +1160,7 @@ async function load() {
   nextPageToken.value = ''
   focusedIdx.value    = -1
   try {
-    const result = await browseObjects(props.conn.provider, props.conn.bucket, props.conn.credentials, currentPrefix.value)
+    const result = await browseObjects(props.conn.provider, props.conn.id, currentPrefix.value)
     entries.value       = result.entries ?? []
     nextPageToken.value = result.next_page_token ?? ''
   } catch (err) {
@@ -1120,7 +1175,7 @@ async function loadMore() {
   if (!nextPageToken.value || loadingMore.value) return
   loadingMore.value = true
   try {
-    const result = await browseObjects(props.conn.provider, props.conn.bucket, props.conn.credentials, currentPrefix.value, nextPageToken.value)
+    const result = await browseObjects(props.conn.provider, props.conn.id, currentPrefix.value, nextPageToken.value)
     entries.value.push(...(result.entries ?? []))
     nextPageToken.value = result.next_page_token ?? ''
   } catch (err) {
@@ -1150,7 +1205,7 @@ async function loadStats() {
   statsLoading.value = true
   statsError.value   = ''
   try {
-    stats.value      = await getBucketStats(props.conn.provider, props.conn.bucket, props.conn.credentials)
+    stats.value      = await getBucketStats(props.conn.provider, props.conn.id)
     statsLoaded.value = true
   } catch (err) {
     statsError.value = 'Stats unavailable'
@@ -1181,7 +1236,7 @@ async function bulkDelete() {
   let failed = 0
   for (const name of names) {
     try {
-      await deleteObject(props.conn.provider, props.conn.bucket, props.conn.credentials, name)
+      await deleteObject(props.conn.provider, props.conn.id, name)
     } catch { failed++ }
   }
   selected.value = new Set()
@@ -1200,7 +1255,7 @@ async function bulkDownload() {
   bulkWorking.value = true
   for (const entry of files) {
     try {
-      const url = await getDownloadURL(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+      const url = await getDownloadURL(props.conn.provider, props.conn.id, entry.name)
       const a = document.createElement('a')
       a.href = url; a.download = entry.display; a.target = '_blank'; a.rel = 'noopener'
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
@@ -1223,7 +1278,7 @@ async function generatePresignUrl() {
   presignLoading.value = true
   try {
     const url = await presignUrl(
-      props.conn.provider, props.conn.bucket, props.conn.credentials,
+      props.conn.provider, props.conn.id,
       presignEntry.value.name, presignExpiresIn.value
     )
     presignUrl_.value = url
@@ -1293,7 +1348,7 @@ async function downloadZip(prefix, objects) {
   if (zipping.value) return
   zipping.value = true
   try {
-    const blob = await zipDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, prefix, objects)
+    const blob = await zipDownload(props.conn.provider, props.conn.id, prefix, objects)
     const archiveName = objects?.length
       ? 'selection'
       : (prefix.replace(/\/$/, '').split('/').pop() || props.conn.bucket)
@@ -1313,7 +1368,7 @@ async function downloadZip(prefix, objects) {
 // ── Copy public URL ──────────────────────────────────────────────
 async function copyPublicUrl(entry) {
   try {
-    const url = await getDownloadURL(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+    const url = await getDownloadURL(props.conn.provider, props.conn.id, entry.name)
     await navigator.clipboard.writeText(url)
     toast.success('Link copied to clipboard')
   } catch (err) {
@@ -1339,7 +1394,7 @@ function copyPath(entry) {
 // ── Download ────────────────────────────────────────────────────
 async function download(entry) {
   try {
-    const url = await getDownloadURL(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+    const url = await getDownloadURL(props.conn.provider, props.conn.id, entry.name)
     const a = document.createElement('a')
     a.href = url; a.download = entry.display; a.target = '_blank'; a.rel = 'noopener'
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
@@ -1354,7 +1409,7 @@ async function confirmDelete(entry) {
   const ok = await confirm.confirm(`Delete "${entry.display}"? This cannot be undone.`)
   if (!ok) return
   try {
-    await deleteObject(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+    await deleteObject(props.conn.provider, props.conn.id, entry.name)
     if (previewEntry.value?.name === entry.name) closePreview()
     toast.success(`"${entry.display}" deleted.`)
     activityLog('delete', `Deleted "${entry.display}"`, props.conn.provider)
@@ -1372,7 +1427,7 @@ async function confirmDeleteFolder(entry) {
   )
   if (!ok) return
   try {
-    const r = await deletePrefix(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+    const r = await deletePrefix(props.conn.provider, props.conn.id, entry.name)
     toast.success(`Folder deleted (${r.deleted} file${r.deleted !== 1 ? 's' : ''} removed).`)
     activityLog('delete', `Deleted folder "${entry.display}" (${r.deleted} files)`, props.conn.provider)
     await load()
@@ -1393,16 +1448,31 @@ function openTransfer(entry) {
 async function doTransfer() {
   if (!transferDstConn.value || transferring.value) return
   transferring.value = true
+  showTransferModal.value = false
+  const dstConn    = transferDstConn.value
+  const srcEntry   = transferEntry.value
+  transferProgress.value = { filename: srcEntry.display, loaded: 0, total: 0, done: false, error: '' }
+  showProgressModal.value = true
   try {
     const r = await transferObject(
-      { provider: props.conn.provider, bucket: props.conn.bucket, credentials: props.conn.credentials, object: transferEntry.value.name },
-      { provider: transferDstConn.value.provider, bucket: transferDstConn.value.bucket, credentials: transferDstConn.value.credentials, prefix: transferDstPrefix.value }
+      { provider: props.conn.provider, connectionId: props.conn.id, object: srcEntry.name },
+      { provider: dstConn.provider, connectionId: dstConn.id, prefix: transferDstPrefix.value }
     )
-    toast.success(`Transferred to ${transferDstConn.value.name}: ${r.destination}`)
-    activityLog('transfer', `Transferred "${transferEntry.value.display}" → ${transferDstConn.value.name}`, props.conn.provider)
-    showTransferModal.value = false
+    watchTransferProgress(r.transfer_id, prog => {
+      transferProgress.value = prog
+      if (prog.done && !prog.error) {
+        toast.success(`Transferred to ${dstConn.name}: ${prog.destination || r.destination}`)
+        activityLog('transfer', `Transferred "${srcEntry.display}" → ${dstConn.name}`, props.conn.provider)
+        setTimeout(() => { showProgressModal.value = false }, 1200)
+        load()
+      } else if (prog.done && prog.error) {
+        toast.error('Transfer failed: ' + prog.error)
+        setTimeout(() => { showProgressModal.value = false }, 3000)
+      }
+    })
   } catch (err) {
     toast.error('Transfer failed: ' + err.message)
+    showProgressModal.value = false
   } finally {
     transferring.value = false
   }
@@ -1417,7 +1487,7 @@ async function handleUpload(files) {
   for (let i = 0; i < fileArr.length; i++) {
     try {
       await uploadObjectWithProgress(
-        props.conn.provider, props.conn.bucket, props.conn.credentials,
+        props.conn.provider, props.conn.id,
         currentPrefix.value, fileArr[i],
         p => { uploadQueue.value[i].progress = p }
       )
@@ -1450,7 +1520,7 @@ async function retryUpload(index) {
   item.done = false
   try {
     await uploadObjectWithProgress(
-      props.conn.provider, props.conn.bucket, props.conn.credentials,
+      props.conn.provider, props.conn.id,
       currentPrefix.value, item.file,
       p => { uploadQueue.value[index].progress = p }
     )
@@ -1489,7 +1559,7 @@ async function handleFolderUpload(files) {
 
     try {
       await uploadObjectWithProgress(
-        props.conn.provider, props.conn.bucket, props.conn.credentials,
+        props.conn.provider, props.conn.id,
         filePrefix, file,
         p => { uploadQueue.value[i].progress = p }
       )
@@ -1524,38 +1594,68 @@ function onDragOver(e) {
   dragCounter++; isDragging.value = true
 }
 function onDragLeave() {
-  if (isCrossTarget.value) { isDragging.value = false; return }
+  if (isCrossTarget.value) { isDragging.value = false; dragOverEntry.value = null; return }
   if (--dragCounter <= 0) { dragCounter = 0; isDragging.value = false }
 }
 function onDrop(e) {
   dragCounter = 0; isDragging.value = false
   if (dragState.value && dragState.value.paneId !== props.paneId) {
-    performCrossPaneCopy(dragState.value)
+    performCrossPaneCopy(dragState.value, dragOverEntry.value)
+    dragOverEntry.value = null
     clearPaneDrag()
     return
   }
+  dragOverEntry.value = null
   handleUpload(e.dataTransfer?.files)
 }
 
 function onRowDragStart(e, entry) {
   e.stopPropagation()
   e.dataTransfer.effectAllowed = 'copy'
+  const ghost = document.createElement('div')
+  ghost.className = 'drag-ghost'
+  ghost.textContent = '📄 ' + entry.display
+  document.body.appendChild(ghost)
+  e.dataTransfer.setDragImage(ghost, 12, 12)
+  requestAnimationFrame(() => document.body.removeChild(ghost))
   startPaneDrag(entry, props.conn, currentPrefix.value, props.paneId)
 }
-function onRowDragEnd() { clearPaneDrag(); isDragging.value = false }
+function onRowDragEnd() { clearPaneDrag(); isDragging.value = false; dragOverEntry.value = null }
 
-async function performCrossPaneCopy(state) {
+function onEntryDragOver(e, entry) {
+  if (!isCrossTarget.value || entry.type !== 'dir') return
+  dragOverEntry.value = entry
+}
+function onEntryDragLeave(entry) {
+  if (dragOverEntry.value?.name === entry.name) dragOverEntry.value = null
+}
+
+async function performCrossPaneCopy(state, targetFolder = null) {
+  const destPrefix = targetFolder ? targetFolder.name : currentPrefix.value
+  const destLabel  = targetFolder ? `${props.conn.name}/${targetFolder.display}` : props.conn.name
+  transferProgress.value = { filename: state.entry.display, loaded: 0, total: 0, done: false, error: '' }
+  showProgressModal.value = true
   try {
     const r = await transferObject(
-      { provider: state.conn.provider, bucket: state.conn.bucket, credentials: state.conn.credentials, object: state.entry.name },
-      { provider: props.conn.provider,  bucket: props.conn.bucket,  credentials: props.conn.credentials,  prefix: currentPrefix.value }
+      { provider: state.conn.provider, connectionId: state.conn.id, object: state.entry.name },
+      { provider: props.conn.provider, connectionId: props.conn.id, prefix: destPrefix }
     )
-    activityLog('transfer', `Copied "${state.entry.display}" to ${props.conn.name}`, props.conn.provider)
-    toast.success(`Copied to ${props.conn.name}: ${r.destination}`)
-    await load()
-    if (statsLoaded.value) { statsLoaded.value = false; loadStats() }
+    watchTransferProgress(r.transfer_id, prog => {
+      transferProgress.value = prog
+      if (prog.done && !prog.error) {
+        activityLog('transfer', `Copied "${state.entry.display}" → ${destLabel}`, props.conn.provider)
+        toast.success(`Copied to ${destLabel}: ${prog.destination || r.destination}`)
+        setTimeout(() => { showProgressModal.value = false }, 1200)
+        load()
+        if (statsLoaded.value) { statsLoaded.value = false; loadStats() }
+      } else if (prog.done && prog.error) {
+        toast.error('Copy failed: ' + prog.error)
+        setTimeout(() => { showProgressModal.value = false }, 3000)
+      }
+    })
   } catch (err) {
     toast.error('Copy failed: ' + err.message)
+    showProgressModal.value = false
   }
 }
 
@@ -1563,12 +1663,10 @@ async function performCrossPaneCopy(state) {
 async function createFolder() {
   const name = newFolderName.value.trim()
   if (!name) return
-  const prefix  = currentPrefix.value + name.replace(/\/+$/, '') + '/'
-  const keepFile = new File([''], '.keep', { type: 'application/octet-stream' })
   showFolderModal.value = false
   newFolderName.value   = ''
   try {
-    await uploadObjects(props.conn.provider, props.conn.bucket, props.conn.credentials, prefix, [keepFile])
+    await createFolderApi(props.conn.provider, props.conn.id, currentPrefix.value, name)
     toast.success(`Folder "${name}" created.`)
     await load()
   } catch (err) {
@@ -1593,7 +1691,7 @@ async function doRename() {
   if (destination === renameEntry.value.name) { showRenameModal.value = false; return }
   renaming.value = true
   try {
-    await copyObject(props.conn.provider, props.conn.bucket, props.conn.credentials, renameEntry.value.name, destination, true)
+    await copyObject(props.conn.provider, props.conn.id, renameEntry.value.name, destination, true)
     if (previewEntry.value?.name === renameEntry.value.name) closePreview()
     toast.success(`Renamed to "${target}".`)
     activityLog('rename', `Renamed "${renameEntry.value.display}" → "${target}"`, props.conn.provider)
@@ -1662,7 +1760,7 @@ async function openPreview(entry) {
     const needsProxy = isExcel(entry) || isWord(entry) || isTextPreviewable(entry)
 
     if (!needsProxy) {
-      const url = await getDownloadURL(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+      const url = await getDownloadURL(props.conn.provider, props.conn.id, entry.name)
       previewUrl.value = url
     }
 
@@ -1671,7 +1769,7 @@ async function openPreview(entry) {
     } else if (isWord(entry)) {
       await loadWordPreview(entry)
     } else if (isTextPreviewable(entry)) {
-      const res = await proxyDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+      const res = await proxyDownload(props.conn.provider, props.conn.id, entry.name)
       const text = (await res.text()).slice(0, PREVIEW_MAX_BYTES)
       previewContent.value = text
       previewLang.value = languageLabel(entry)
@@ -1700,7 +1798,7 @@ async function openPreview(entry) {
 }
 
 async function loadExcelPreview(entry) {
-  const res = await proxyDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+  const res = await proxyDownload(props.conn.provider, props.conn.id, entry.name)
   const buf = await res.arrayBuffer()
   const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
   previewExcelSheets.value = wb.SheetNames.map(name => {
@@ -1714,7 +1812,7 @@ async function loadExcelPreview(entry) {
 }
 
 async function loadWordPreview(entry) {
-  const res = await proxyDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+  const res = await proxyDownload(props.conn.provider, props.conn.id, entry.name)
   const buf = await res.arrayBuffer()
   const result = await mammoth.convertToHtml({ arrayBuffer: buf })
   previewWordHtml.value = DOMPurify.sanitize(result.value)
@@ -1822,7 +1920,7 @@ async function openMeta(entry) {
   metaError.value    = ''
   metaLoading.value  = true
   try {
-    const data = await getObjectMetadata(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+    const data = await getObjectMetadata(props.conn.provider, props.conn.id, entry.name)
     metaData.value = data
     metaEdit.value = { content_type: data.content_type || '', cache_control: data.cache_control || '' }
     metaRows.value = Object.entries(data.metadata || {}).map(([key, val]) => ({ key, val }))
@@ -1842,7 +1940,7 @@ async function saveMeta() {
     for (const { key, val } of metaRows.value) {
       if (key.trim()) metadata[key.trim()] = val
     }
-    await updateObjectMetadata(props.conn.provider, props.conn.bucket, props.conn.credentials, metaEntry.value.name, {
+    await updateObjectMetadata(props.conn.provider, props.conn.id, metaEntry.value.name, {
       content_type:  metaEdit.value.content_type,
       cache_control: metaEdit.value.cache_control,
       metadata,

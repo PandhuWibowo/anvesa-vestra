@@ -2,6 +2,8 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
+	"log"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -27,7 +29,11 @@ func Init(dbPath string) error {
 			initErr = err
 			return
 		}
-		initErr = createTables()
+		if err := createTables(); err != nil {
+			initErr = err
+			return
+		}
+		initErr = runMigrations()
 	})
 	return initErr
 }
@@ -71,20 +77,6 @@ func createTables() error {
 			created_at  DATETIME NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS gdrive_connections (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			name        TEXT NOT NULL,
-			bucket      TEXT NOT NULL,
-			credentials TEXT NOT NULL,
-			created_at  DATETIME NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS b2_connections (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			name        TEXT NOT NULL,
-			bucket      TEXT NOT NULL,
-			credentials TEXT NOT NULL,
-			created_at  DATETIME NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS do_connections (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			name        TEXT NOT NULL,
 			bucket      TEXT NOT NULL,
@@ -173,6 +165,11 @@ func createTables() error {
 			active     INTEGER DEFAULT 1,
 			created_at DATETIME NOT NULL
 		)`,
+		// ── Schema migrations tracking ──────────────────────────────
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER PRIMARY KEY,
+			applied_at DATETIME NOT NULL
+		)`,
 		// ── Indexes ──────────────────────────────────────────────────
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)`,
@@ -187,6 +184,44 @@ func createTables() error {
 		if _, err := DB.Exec(ddl); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+type migration struct {
+	Version int
+	SQL     string
+}
+
+var migrations = []migration{
+	{
+		Version: 1,
+		SQL:     `DROP TABLE IF EXISTS b2_connections; DROP TABLE IF EXISTS do_connections;`,
+	},
+}
+
+func runMigrations() error {
+	for _, m := range migrations {
+		var applied int
+		err := DB.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", m.Version).Scan(&applied)
+		if err != nil {
+			return fmt.Errorf("migration check failed: %w", err)
+		}
+		if applied > 0 {
+			continue
+		}
+
+		log.Printf("applying migration %d", m.Version)
+		if _, err := DB.Exec(m.SQL); err != nil {
+			return fmt.Errorf("migration %d failed: %w", m.Version, err)
+		}
+		if _, err := DB.Exec(
+			"INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))",
+			m.Version,
+		); err != nil {
+			return fmt.Errorf("migration %d: failed to record: %w", m.Version, err)
+		}
+		log.Printf("migration %d applied successfully", m.Version)
 	}
 	return nil
 }

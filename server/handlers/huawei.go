@@ -51,6 +51,8 @@ func obsS3Client(ctx context.Context, creds map[string]string) (*s3.Client, erro
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(provider),
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, err
@@ -58,8 +60,6 @@ func obsS3Client(ctx context.Context, creds map[string]string) (*s3.Client, erro
 
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
-		// Huawei OBS uses virtual-hosted style by default:
-		// https://<bucket>.obs.<region>.myhuaweicloud.com
 		o.UsePathStyle = false
 	}), nil
 }
@@ -76,8 +76,6 @@ func testOBS(bucket, credentialsJSON string) error {
 	if err != nil {
 		return err
 	}
-	// Use ListObjectsV2 (obs:ListBucket) instead of HeadBucket (obs:GetBucketMetadata)
-	// because list permission is more commonly granted in Huawei OBS IAM policies.
 	_, err = client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:  aws.String(bucket),
 		MaxKeys: aws.Int32(1),
@@ -98,22 +96,20 @@ func ListHuawei(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type HuaweiConnection struct {
-		ID          int64     `json:"id"`
-		Name        string    `json:"name"`
-		Bucket      string    `json:"bucket"`
-		Credentials string    `json:"credentials"`
-		CreatedAt   time.Time `json:"created_at"`
+		ID        int64     `json:"id"`
+		Name      string    `json:"name"`
+		Bucket    string    `json:"bucket"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 
 	conns := []HuaweiConnection{}
 	for rows.Next() {
 		var c HuaweiConnection
-		var created string
-		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &c.Credentials, &created); err != nil {
+		var created, creds string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &creds, &created); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		c.Credentials, _ = decryptCredentials(c.Credentials)
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		conns = append(conns, c)
 	}
@@ -127,16 +123,16 @@ func CreateHuawei(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testOBS(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -145,12 +141,11 @@ func CreateHuawei(w http.ResponseWriter, r *http.Request) {
 		req.Name, req.Bucket, encrypted, now,
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id, _ := res.LastInsertId()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+	jsonOK(w, map[string]any{"id": id})
 }
 
 // HuaweiConnByID handles DELETE and PUT for /api/huawei/connection/{id}.
@@ -161,23 +156,23 @@ func HuaweiConnByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		UpdateHuaweiConn(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func DeleteHuaweiConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	if _, err = appdb.DB.Exec("DELETE FROM huawei_connections WHERE id = ?", id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -186,12 +181,12 @@ func DeleteHuaweiConn(w http.ResponseWriter, r *http.Request) {
 func UpdateHuaweiConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	var req struct {
@@ -200,23 +195,23 @@ func UpdateHuaweiConn(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testOBS(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	if _, err := appdb.DB.Exec(
 		"UPDATE huawei_connections SET name=?, bucket=?, credentials=? WHERE id=?",
 		req.Name, req.Bucket, encrypted, id,
 	); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -228,15 +223,14 @@ func TestHuawei(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testOBS(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // ── bucket operations ─────────────────────────────────────────────
@@ -252,19 +246,26 @@ type obsEntry struct {
 // BrowseHuaweiBucket lists entries at a given prefix with pagination.
 func BrowseHuaweiBucket(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
-		PageToken   string `json:"page_token"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		PageToken    string `json:"page_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -273,12 +274,12 @@ func BrowseHuaweiBucket(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	input := &s3.ListObjectsV2Input{
-		Bucket:    aws.String(req.Bucket),
+		Bucket:    aws.String(bucket),
 		Prefix:    aws.String(req.Prefix),
 		Delimiter: aws.String("/"),
 		MaxKeys:   aws.Int32(200),
@@ -289,7 +290,7 @@ func BrowseHuaweiBucket(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.ListObjectsV2(ctx, input)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -325,8 +326,7 @@ func BrowseHuaweiBucket(w http.ResponseWriter, r *http.Request) {
 		nextToken = *result.NextContinuationToken
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"prefix":          req.Prefix,
 		"entries":         entries,
 		"next_page_token": nextToken,
@@ -336,17 +336,24 @@ func BrowseHuaweiBucket(w http.ResponseWriter, r *http.Request) {
 // ListHuaweiObjects is a flat listing (backward compat).
 func ListHuaweiObjects(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -355,7 +362,7 @@ func ListHuaweiObjects(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -368,7 +375,7 @@ func ListHuaweiObjects(w http.ResponseWriter, r *http.Request) {
 	const maxResults = 1000
 	var objects []obsObject
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket:  aws.String(req.Bucket),
+		Bucket:  aws.String(bucket),
 		MaxKeys: aws.Int32(maxResults),
 	})
 	for paginator.HasMorePages() && len(objects) < maxResults {
@@ -395,8 +402,7 @@ func ListHuaweiObjects(w http.ResponseWriter, r *http.Request) {
 	if objects == nil {
 		objects = []obsObject{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"objects":   objects,
 		"truncated": len(objects) == maxResults,
 	})
@@ -405,19 +411,26 @@ func ListHuaweiObjects(w http.ResponseWriter, r *http.Request) {
 // HuaweiDownloadURL generates a presigned GET URL (default 15 min; customisable via expires_in seconds).
 func HuaweiDownloadURL(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
-		ExpiresIn   int64  `json:"expires_in"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
+		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -431,38 +444,44 @@ func HuaweiDownloadURL(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	psClient := s3.NewPresignClient(client)
 	presigned, err := psClient.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(req.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(req.Object),
 	}, func(o *s3.PresignOptions) { o.Expires = expiry })
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"url": presigned.URL})
+	jsonOK(w, map[string]string{"url": presigned.URL})
 }
 
 // DeleteHuaweiObject deletes a single OBS object.
 func DeleteHuaweiObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -471,15 +490,15 @@ func DeleteHuaweiObject(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if _, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(req.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(req.Object),
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -488,20 +507,27 @@ func DeleteHuaweiObject(w http.ResponseWriter, r *http.Request) {
 // CopyHuaweiObject copies (and optionally deletes) an OBS object — used for rename/move.
 func CopyHuaweiObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
-		Delete      bool   `json:"delete_source"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Source       string `json:"source"`
+		Destination  string `json:"destination"`
+		Delete       bool   `json:"delete_source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -510,26 +536,26 @@ func CopyHuaweiObject(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	copySource := req.Bucket + "/" + req.Source
+	copySource := bucket + "/" + req.Source
 	if _, err := client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:     aws.String(req.Bucket),
+		Bucket:     aws.String(bucket),
 		CopySource: aws.String(copySource),
 		Key:        aws.String(req.Destination),
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if req.Delete {
 		if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(req.Bucket),
+			Bucket: aws.String(bucket),
 			Key:    aws.String(req.Source),
 		}); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -539,24 +565,36 @@ func CopyHuaweiObject(w http.ResponseWriter, r *http.Request) {
 // UploadHuaweiObject uploads a file to OBS via multipart form.
 func UploadHuaweiObject(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	bucket := r.FormValue("bucket")
+	connIDStr := r.FormValue("connection_id")
+	bucketVal := r.FormValue("bucket")
 	rawCreds := r.FormValue("credentials")
 	prefix := r.FormValue("prefix")
 
+	var connID int64
+	if connIDStr != "" {
+		connID, _ = strconv.ParseInt(connIDStr, 10, 64)
+	}
+
+	bucket, credsJSON, err := resolveProviderCreds("huawei", connID, bucketVal, rawCreds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
-	creds, err := obsCredsFromJSON(rawCreds)
+	creds, err := obsCredsFromJSON(credsJSON)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -565,13 +603,13 @@ func UploadHuaweiObject(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -588,27 +626,33 @@ func UploadHuaweiObject(w http.ResponseWriter, r *http.Request) {
 		ContentLength: aws.Int64(int64(len(data))),
 		ContentType:   aws.String(contentType),
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"name": objectName})
+	jsonOK(w, map[string]string{"name": objectName})
 }
 
 // HuaweiBucketStats returns sampled object count and total size.
 func HuaweiBucketStats(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -617,14 +661,14 @@ func HuaweiBucketStats(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	const maxSample = 10000
 	var count, totalSize int64
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket:  aws.String(req.Bucket),
+		Bucket:  aws.String(bucket),
 		MaxKeys: aws.Int32(1000),
 	})
 	for paginator.HasMorePages() && count < maxSample {
@@ -639,8 +683,7 @@ func HuaweiBucketStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"object_count": count,
 		"total_size":   totalSize,
 		"truncated":    count == maxSample,
@@ -650,18 +693,25 @@ func HuaweiBucketStats(w http.ResponseWriter, r *http.Request) {
 // GetHuaweiMetadata returns full metadata for an OBS object via HeadObject.
 func GetHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -670,16 +720,16 @@ func GetHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(req.Bucket),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(req.Object),
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -708,8 +758,7 @@ func GetHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 		md = map[string]string{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"content_type":  contentType,
 		"cache_control": cacheControl,
 		"metadata":      md,
@@ -722,24 +771,33 @@ func GetHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 // DeletePrefixHuawei deletes all objects under a given prefix (recursive folder delete).
 func DeletePrefixHuawei(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	creds, err := obsCredsFromJSON(req.Credentials)
+
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -747,12 +805,12 @@ func DeletePrefixHuawei(w http.ResponseWriter, r *http.Request) {
 	var token *string
 	for {
 		out, listErr := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(req.Bucket),
+			Bucket:            aws.String(bucket),
 			Prefix:            aws.String(req.Prefix),
 			ContinuationToken: token,
 		})
 		if listErr != nil {
-			http.Error(w, listErr.Error(), http.StatusInternalServerError)
+			jsonError(w, listErr.Error(), http.StatusInternalServerError)
 			return
 		}
 		if len(out.Contents) > 0 {
@@ -761,7 +819,7 @@ func DeletePrefixHuawei(w http.ResponseWriter, r *http.Request) {
 				ids[i] = types.ObjectIdentifier{Key: o.Key}
 			}
 			client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-				Bucket: aws.String(req.Bucket),
+				Bucket: aws.String(bucket),
 				Delete: &types.Delete{Objects: ids},
 			})
 		}
@@ -771,13 +829,13 @@ func DeletePrefixHuawei(w http.ResponseWriter, r *http.Request) {
 		}
 		token = out.NextContinuationToken
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+	jsonOK(w, map[string]int{"deleted": deleted})
 }
 
 // UpdateHuaweiMetadata patches an OBS object's metadata via copy-to-self.
 func UpdateHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		ConnectionID int64             `json:"connection_id"`
 		Bucket       string            `json:"bucket"`
 		Credentials  string            `json:"credentials"`
 		Object       string            `json:"object"`
@@ -786,13 +844,19 @@ func UpdateHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	creds, err := obsCredsFromJSON(req.Credentials)
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -801,13 +865,13 @@ func UpdateHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 
 	client, err := obsS3Client(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	copySource := req.Bucket + "/" + req.Object
+	copySource := bucket + "/" + req.Object
 	input := &s3.CopyObjectInput{
-		Bucket:            aws.String(req.Bucket),
+		Bucket:            aws.String(bucket),
 		CopySource:        aws.String(copySource),
 		Key:               aws.String(req.Object),
 		MetadataDirective: types.MetadataDirectiveReplace,
@@ -821,8 +885,67 @@ func UpdateHuaweiMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := client.CopyObject(ctx, input); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// CreateFolderHuawei creates an empty "folder" object (zero-byte object with trailing slash).
+func CreateFolderHuawei(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		Name         string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, credsJSON, err := resolveProviderCreds("huawei", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		jsonError(w, "folder name is required", http.StatusBadRequest)
+		return
+	}
+
+	folderKey := req.Prefix + strings.TrimSuffix(req.Name, "/") + "/"
+
+	creds, err := obsCredsFromJSON(credsJSON)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client, err := obsS3Client(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err = client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(folderKey),
+		Body:          bytes.NewReader([]byte{}),
+		ContentLength: aws.Int64(0),
+		ContentType:   aws.String("application/x-directory"),
+	}); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"name": folderKey})
 }

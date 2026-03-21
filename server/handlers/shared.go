@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -26,8 +27,6 @@ var providerTable = map[string]string{
 	"gcp":     "gcp_connections",
 	"azure":   "azure_connections",
 	"gdrive":  "gdrive_connections",
-	"b2":      "b2_connections",
-	"do":      "do_connections",
 }
 
 // s3Providers maps provider names to their S3Provider instances.
@@ -160,7 +159,18 @@ func AccessSharedLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if passwordHash.Valid && passwordHash.String != "" {
-		pw := r.URL.Query().Get("password")
+		pw := r.Header.Get("X-Share-Password")
+		if pw == "" && r.Method == http.MethodPost {
+			body, err := io.ReadAll(io.LimitReader(r.Body, 1024))
+			if err == nil && len(body) > 0 {
+				var pwBody struct {
+					Password string `json:"password"`
+				}
+				if json.Unmarshal(body, &pwBody) == nil {
+					pw = pwBody.Password
+				}
+			}
+		}
 		if pw == "" {
 			jsonError(w, "password required", http.StatusUnauthorized)
 			return

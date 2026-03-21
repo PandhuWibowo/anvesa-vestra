@@ -26,7 +26,6 @@ func gcpClient(ctx context.Context, credentials string) (*storage.Client, error)
 	return storage.NewClient(ctx, option.WithCredentialsJSON([]byte(credentials)))
 }
 
-// testGCP verifies GCP bucket access.
 func testGCP(bucket, credentialsJSON string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -49,6 +48,14 @@ func testGCP(bucket, credentialsJSON string) error {
 	return fmt.Errorf("bucket not accessible")
 }
 
+func resolveGCP(req struct {
+	ConnectionID int64  `json:"connection_id"`
+	Bucket       string `json:"bucket"`
+	Credentials  string `json:"credentials"`
+}) (string, string, error) {
+	return resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+}
+
 // ── connection CRUD ───────────────────────────────────────────────
 
 func ListGCP(w http.ResponseWriter, r *http.Request) {
@@ -62,22 +69,20 @@ func ListGCP(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type GCPConnection struct {
-		ID          int64     `json:"id"`
-		Name        string    `json:"name"`
-		Bucket      string    `json:"bucket"`
-		Credentials string    `json:"credentials"`
-		CreatedAt   time.Time `json:"created_at"`
+		ID        int64     `json:"id"`
+		Name      string    `json:"name"`
+		Bucket    string    `json:"bucket"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 
 	conns := []GCPConnection{}
 	for rows.Next() {
 		var c GCPConnection
-		var created string
-		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &c.Credentials, &created); err != nil {
+		var created, creds string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &creds, &created); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		c.Credentials, _ = decryptCredentials(c.Credentials)
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		conns = append(conns, c)
 	}
@@ -91,16 +96,16 @@ func CreateGCP(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testGCP(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -109,15 +114,13 @@ func CreateGCP(w http.ResponseWriter, r *http.Request) {
 		req.Name, req.Bucket, encrypted, now,
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id, _ := res.LastInsertId()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+	jsonOK(w, map[string]any{"id": id})
 }
 
-// GCPConnByID handles both DELETE and PUT for /api/gcp/connection/{id}.
 func GCPConnByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodDelete:
@@ -125,23 +128,23 @@ func GCPConnByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		UpdateGCPConn(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func DeleteGCPConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	if _, err = appdb.DB.Exec("DELETE FROM gcp_connections WHERE id = ?", id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -150,12 +153,12 @@ func DeleteGCPConn(w http.ResponseWriter, r *http.Request) {
 func UpdateGCPConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	var req struct {
@@ -164,23 +167,23 @@ func UpdateGCPConn(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testGCP(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	if _, err := appdb.DB.Exec(
 		"UPDATE gcp_connections SET name=?, bucket=?, credentials=? WHERE id=?",
 		req.Name, req.Bucket, encrypted, id,
 	); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -192,21 +195,20 @@ func TestGCP(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testGCP(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // ── bucket operations ─────────────────────────────────────────────
 
 type gcpEntry struct {
-	Type        string    `json:"type"` // "dir" | "file"
+	Type        string    `json:"type"`
 	Name        string    `json:"name"`
 	Display     string    `json:"display"`
 	Size        int64     `json:"size,omitempty"`
@@ -214,30 +216,36 @@ type gcpEntry struct {
 	ContentType string    `json:"content_type,omitempty"`
 }
 
-// BrowseGCPBucket lists entries (files + virtual folders) at a given prefix with pagination.
 func BrowseGCPBucket(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
-		PageToken   string `json:"page_token"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		PageToken    string `json:"page_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
-	it := client.Bucket(req.Bucket).Objects(ctx, &storage.Query{
+	it := client.Bucket(bucket).Objects(ctx, &storage.Query{
 		Prefix:    req.Prefix,
 		Delimiter: "/",
 	})
@@ -274,31 +282,36 @@ func BrowseGCPBucket(w http.ResponseWriter, r *http.Request) {
 		entries = []gcpEntry{}
 	}
 	nextToken := it.PageInfo().Token
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"prefix":          req.Prefix,
 		"entries":         entries,
 		"next_page_token": nextToken,
 	})
 }
 
-// ListGCPObjects is kept for backward compat (flat listing).
 func ListGCPObjects(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
@@ -311,7 +324,7 @@ func ListGCPObjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const maxResults = 1000
-	it := client.Bucket(req.Bucket).Objects(ctx, nil)
+	it := client.Bucket(bucket).Objects(ctx, nil)
 	var objects []gcpObject
 	for len(objects) < maxResults {
 		attrs, iterErr := it.Next()
@@ -326,32 +339,34 @@ func ListGCPObjects(w http.ResponseWriter, r *http.Request) {
 	if objects == nil {
 		objects = []gcpObject{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"objects":   objects,
 		"truncated": len(objects) == maxResults,
 	})
 }
 
-// GCPDownloadURL returns a public or signed download URL for an object.
-// Optional expires_in (seconds) controls signed URL lifetime; defaults to 900s.
 func GCPDownloadURL(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
-		ExpiresIn   int64  `json:"expires_in"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
+		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Public bucket — direct CDN URL
-	if strings.TrimSpace(req.Credentials) == "" {
-		url := fmt.Sprintf("https://storage.googleapis.com/%s/%s", req.Bucket, req.Object)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(creds) == "" {
+		url := fmt.Sprintf("https://storage.googleapis.com/%s/%s", bucket, req.Object)
+		jsonOK(w, map[string]string{"url": url})
 		return
 	}
 
@@ -360,113 +375,134 @@ func GCPDownloadURL(w http.ResponseWriter, r *http.Request) {
 		expiry = 15 * time.Minute
 	}
 
-	// Authenticated — signed URL
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
-	signed, err := client.Bucket(req.Bucket).SignedURL(req.Object, &storage.SignedURLOptions{
+	signed, err := client.Bucket(bucket).SignedURL(req.Object, &storage.SignedURLOptions{
 		Scheme:  storage.SigningSchemeV4,
 		Method:  "GET",
 		Expires: time.Now().Add(expiry),
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"url": signed})
+	jsonOK(w, map[string]string{"url": signed})
 }
 
-// DeleteGCPObject deletes a single GCS object.
 func DeleteGCPObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
-	if err := client.Bucket(req.Bucket).Object(req.Object).Delete(ctx); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := client.Bucket(bucket).Object(req.Object).Delete(ctx); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// CopyGCPObject copies (and optionally deletes) a GCS object — used for rename/move.
 func CopyGCPObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
-		Delete      bool   `json:"delete_source"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Source       string `json:"source"`
+		Destination  string `json:"destination"`
+		Delete       bool   `json:"delete_source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
-	src := client.Bucket(req.Bucket).Object(req.Source)
-	dst := client.Bucket(req.Bucket).Object(req.Destination)
+	src := client.Bucket(bucket).Object(req.Source)
+	dst := client.Bucket(bucket).Object(req.Destination)
 
 	if _, err := dst.CopierFrom(src).Run(ctx); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if req.Delete {
 		if err := src.Delete(ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UploadGCPObject uploads a file to GCS via multipart form.
 func UploadGCPObject(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	connIDStr := r.FormValue("connection_id")
 	bucket := r.FormValue("bucket")
 	creds := r.FormValue("credentials")
 	prefix := r.FormValue("prefix")
 
+	var connID int64
+	if connIDStr != "" {
+		connID, _ = strconv.ParseInt(connIDStr, 10, 64)
+	}
+
+	resolvedBucket, resolvedCreds, err := resolveProviderCreds("gcp", connID, bucket, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -474,15 +510,15 @@ func UploadGCPObject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	client, err := gcpClient(ctx, creds)
+	client, err := gcpClient(ctx, resolvedCreds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
 	objectName := prefix + header.Filename
-	wc := client.Bucket(bucket).Object(objectName).NewWriter(ctx)
+	wc := client.Bucket(resolvedBucket).Object(objectName).NewWriter(ctx)
 	wc.ContentType = header.Header.Get("Content-Type")
 	if wc.ContentType == "" {
 		wc.ContentType = "application/octet-stream"
@@ -490,40 +526,45 @@ func UploadGCPObject(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := io.Copy(wc, file); err != nil {
 		_ = wc.Close()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := wc.Close(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"name": objectName})
+	jsonOK(w, map[string]string{"name": objectName})
 }
 
-// GCPBucketStats returns sampled object count and total size.
 func GCPBucketStats(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
 	const maxSample = 10000
-	it := client.Bucket(req.Bucket).Objects(ctx, nil)
+	it := client.Bucket(bucket).Objects(ctx, nil)
 	var count int64
 	var totalSize int64
 	for count < maxSample {
@@ -534,39 +575,44 @@ func GCPBucketStats(w http.ResponseWriter, r *http.Request) {
 		count++
 		totalSize += attrs.Size
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"object_count": count,
 		"total_size":   totalSize,
 		"truncated":    count == maxSample,
 	})
 }
 
-// GetGCPMetadata returns full metadata for a GCS object.
 func GetGCPMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
-	attrs, err := client.Bucket(req.Bucket).Object(req.Object).Attrs(ctx)
+	attrs, err := client.Bucket(bucket).Object(req.Object).Attrs(ctx)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -574,8 +620,7 @@ func GetGCPMetadata(w http.ResponseWriter, r *http.Request) {
 	if md == nil {
 		md = map[string]string{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"content_type":  attrs.ContentType,
 		"cache_control": attrs.CacheControl,
 		"metadata":      md,
@@ -586,27 +631,34 @@ func GetGCPMetadata(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeletePrefixGCP deletes all objects under a given prefix (recursive folder delete).
 func DeletePrefixGCP(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
 
-	it := client.Bucket(req.Bucket).Objects(ctx, &storage.Query{Prefix: req.Prefix})
+	it := client.Bucket(bucket).Objects(ctx, &storage.Query{Prefix: req.Prefix})
 	deleted := 0
 	for {
 		attrs, iterErr := it.Next()
@@ -614,19 +666,18 @@ func DeletePrefixGCP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if iterErr != nil {
-			http.Error(w, iterErr.Error(), http.StatusInternalServerError)
+			jsonError(w, iterErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		client.Bucket(req.Bucket).Object(attrs.Name).Delete(ctx)
+		client.Bucket(bucket).Object(attrs.Name).Delete(ctx)
 		deleted++
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+	jsonOK(w, map[string]int{"deleted": deleted})
 }
 
-// UpdateGCPMetadata patches content-type, cache-control, and custom metadata on a GCS object.
 func UpdateGCPMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		ConnectionID int64             `json:"connection_id"`
 		Bucket       string            `json:"bucket"`
 		Credentials  string            `json:"credentials"`
 		Object       string            `json:"object"`
@@ -635,16 +686,22 @@ func UpdateGCPMetadata(w http.ResponseWriter, r *http.Request) {
 		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	client, err := gcpClient(ctx, req.Credentials)
+	client, err := gcpClient(ctx, creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer client.Close()
@@ -654,9 +711,59 @@ func UpdateGCPMetadata(w http.ResponseWriter, r *http.Request) {
 		CacheControl: req.CacheControl,
 		Metadata:     req.Metadata,
 	}
-	if _, err := client.Bucket(req.Bucket).Object(req.Object).Update(ctx, uattrs); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if _, err := client.Bucket(bucket).Object(req.Object).Update(ctx, uattrs); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// CreateFolderGCP creates an empty "folder" object (zero-byte object with trailing slash).
+func CreateFolderGCP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		Name         string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		jsonError(w, "folder name is required", http.StatusBadRequest)
+		return
+	}
+
+	folderKey := req.Prefix + strings.TrimSuffix(req.Name, "/") + "/"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	wc := client.Bucket(bucket).Object(folderKey).NewWriter(ctx)
+	wc.ContentType = "application/x-directory"
+	if err := wc.Close(); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"name": folderKey})
 }

@@ -5,6 +5,8 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,15 +58,22 @@ func RateLimit(requestsPerSecond float64, burst int) func(http.HandlerFunc) http
 	}
 }
 
+// LoginRateLimit returns a stricter rate limiter for auth endpoints (~5 req/min).
+func LoginRateLimit() func(http.HandlerFunc) http.HandlerFunc {
+	return RateLimit(0.083, 10)
+}
+
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		parts := net.ParseIP(fwd)
-		if parts != nil {
-			return parts.String()
+	if os.Getenv("TRUST_PROXY") == "true" {
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			parts := net.ParseIP(strings.Split(fwd, ",")[0])
+			if parts != nil {
+				return parts.String()
+			}
 		}
-	}
-	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-		return realIP
+		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+			return realIP
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

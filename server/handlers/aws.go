@@ -38,6 +38,11 @@ func awsS3Client(ctx context.Context, creds map[string]string) (*s3.Client, erro
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(provider),
+		// Only send checksum headers when an operation explicitly requires them.
+		// Without this, newer SDK versions send x-amz-checksum-* headers that
+		// some S3 regions (e.g. ap-southeast-3) reject with 501 NotImplemented.
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, err
@@ -95,4 +100,5 @@ var (
 	GetAWSMetadata   = AWS.GetMetadata()
 	UpdateAWSMetadata = AWS.UpdateMetadata()
 	DeletePrefixAWS  = AWS.DeletePrefix()
+	CreateFolderAWS  = AWS.CreateFolder()
 )

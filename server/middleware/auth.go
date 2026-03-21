@@ -19,6 +19,12 @@ func RequireAuth(jwtSecret string) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
+			// EventSource cannot send custom headers, so also accept token as query param.
+			if (header == "" || !strings.HasPrefix(header, "Bearer ")) {
+				if t := r.URL.Query().Get("token"); t != "" {
+					header = "Bearer " + t
+				}
+			}
 			if header == "" || !strings.HasPrefix(header, "Bearer ") {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
