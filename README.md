@@ -8,6 +8,13 @@ A self-hosted, open-source cloud storage manager. Browse, upload, download, rena
 
 ## Quick Start
 
+**Default Account**
+
+```bash
+username: admin
+password: admin123
+```
+
 **Docker (recommended)**
 
 ```bash
