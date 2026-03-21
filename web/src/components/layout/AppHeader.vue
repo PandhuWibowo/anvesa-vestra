@@ -1,16 +1,22 @@
 <template>
-  <aside class="sidebar">
-    <!-- Brand -->
+  <aside class="sidebar" :class="{ 'is-collapsed': collapsed }">
+    <!-- Brand + collapse toggle in one row -->
     <div class="sidebar__brand">
       <div class="brand-icon">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 15a4 4 0 0 0 4 4h9a5 5 0 0 0 1.8-9.7 6 6 0 0 0-11.8-1A4 4 0 0 0 3 15z"/>
         </svg>
       </div>
-      <div>
+      <div style="flex:1;min-width:0">
         <div class="brand-name"><span class="brand-anvesa">Anveesa</span> Vestra</div>
         <div class="brand-sub">Cloud storage manager</div>
       </div>
+      <button class="sidebar__collapse-btn" @click="collapsed = !collapsed" :title="collapsed ? 'Expand sidebar' : 'Collapse sidebar'">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <polyline v-if="!collapsed" points="7.5 9 4.5 6 7.5 3"/>
+          <polyline v-else             points="4.5 9 7.5 6 4.5 3"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Scrollable body: connections + bookmarks + management nav -->
@@ -224,7 +230,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import SkeletonLoader from '../ui/SkeletonLoader.vue'
 import ProviderIcon   from '../ui/ProviderIcon.vue'
 import { useTheme }     from '../../composables/useTheme.js'
@@ -255,6 +261,9 @@ const { bookmarks, removeBookmark }     = useBookmarks()
 const query           = ref('')
 const filterProviders = ref(new Set())
 const navOpen         = ref(true)
+const collapsed       = ref(localStorage.getItem('anveesa-sidebar-collapsed') === 'true')
+
+watch(collapsed, v => localStorage.setItem('anveesa-sidebar-collapsed', String(v)))
 
 const availableProviders = computed(() => {
   const seen = new Set()

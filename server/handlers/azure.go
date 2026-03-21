@@ -108,22 +108,20 @@ func ListAzure(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type AzureConnection struct {
-		ID          int64     `json:"id"`
-		Name        string    `json:"name"`
-		Bucket      string    `json:"bucket"`
-		Credentials string    `json:"credentials"`
-		CreatedAt   time.Time `json:"created_at"`
+		ID        int64     `json:"id"`
+		Name      string    `json:"name"`
+		Bucket    string    `json:"bucket"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 
 	conns := []AzureConnection{}
 	for rows.Next() {
 		var c AzureConnection
-		var created string
-		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &c.Credentials, &created); err != nil {
+		var created, creds string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &creds, &created); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		c.Credentials, _ = decryptCredentials(c.Credentials)
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		conns = append(conns, c)
 	}
@@ -137,16 +135,16 @@ func CreateAzure(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testAzure(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -155,12 +153,11 @@ func CreateAzure(w http.ResponseWriter, r *http.Request) {
 		req.Name, req.Bucket, encrypted, now,
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id, _ := res.LastInsertId()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+	jsonOK(w, map[string]any{"id": id})
 }
 
 // AzureConnByID handles DELETE and PUT for /api/azure/connection/{id}.
@@ -171,23 +168,23 @@ func AzureConnByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		UpdateAzureConn(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func DeleteAzureConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	if _, err = appdb.DB.Exec("DELETE FROM azure_connections WHERE id = ?", id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -196,12 +193,12 @@ func DeleteAzureConn(w http.ResponseWriter, r *http.Request) {
 func UpdateAzureConn(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonError(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	id, err := strconv.ParseInt(parts[4], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		jsonError(w, "invalid id", http.StatusBadRequest)
 		return
 	}
 	var req struct {
@@ -210,23 +207,23 @@ func UpdateAzureConn(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testAzure(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
+		jsonError(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
 	encrypted, err := encryptCredentials(req.Credentials)
 	if err != nil {
-		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		jsonError(w, "failed to encrypt credentials", http.StatusInternalServerError)
 		return
 	}
 	if _, err := appdb.DB.Exec(
 		"UPDATE azure_connections SET name=?, bucket=?, credentials=? WHERE id=?",
 		req.Name, req.Bucket, encrypted, id,
 	); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -238,15 +235,14 @@ func TestAzure(w http.ResponseWriter, r *http.Request) {
 		Credentials string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := testAzure(req.Bucket, req.Credentials); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // ── bucket operations ─────────────────────────────────────────────
@@ -262,28 +258,35 @@ type azureEntry struct {
 // BrowseAzureBucket lists blobs in a container at a given prefix (hierarchy).
 func BrowseAzureBucket(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
-		PageToken   string `json:"page_token"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		PageToken    string `json:"page_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -303,7 +306,7 @@ func BrowseAzureBucket(w http.ResponseWriter, r *http.Request) {
 	if pager.More() {
 		page, pageErr := pager.NextPage(ctx)
 		if pageErr != nil {
-			http.Error(w, pageErr.Error(), http.StatusBadRequest)
+			jsonError(w, pageErr.Error(), http.StatusBadRequest)
 			return
 		}
 		for _, p := range page.Segment.BlobPrefixes {
@@ -337,8 +340,7 @@ func BrowseAzureBucket(w http.ResponseWriter, r *http.Request) {
 		entries = []azureEntry{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"prefix":          req.Prefix,
 		"entries":         entries,
 		"next_page_token": nextToken,
@@ -348,26 +350,33 @@ func BrowseAzureBucket(w http.ResponseWriter, r *http.Request) {
 // ListAzureObjects is a flat listing (backward compat).
 func ListAzureObjects(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -406,8 +415,7 @@ func ListAzureObjects(w http.ResponseWriter, r *http.Request) {
 	if objects == nil {
 		objects = []azureObject{}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"objects":   objects,
 		"truncated": len(objects) == maxResults,
 	})
@@ -416,19 +424,26 @@ func ListAzureObjects(w http.ResponseWriter, r *http.Request) {
 // AzureDownloadURL generates a SAS download URL (default 15 min; customisable via expires_in seconds).
 func AzureDownloadURL(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
-		ExpiresIn   int64  `json:"expires_in"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
+		ExpiresIn    int64  `json:"expires_in"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -439,7 +454,7 @@ func AzureDownloadURL(w http.ResponseWriter, r *http.Request) {
 
 	cred, err := azureCred(accountName, accountKey)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -449,52 +464,58 @@ func AzureDownloadURL(w http.ResponseWriter, r *http.Request) {
 		StartTime:     time.Now().UTC().Add(-10 * time.Second),
 		ExpiryTime:    time.Now().UTC().Add(expiry),
 		Permissions:   perms.String(),
-		ContainerName: req.Bucket,
+		ContainerName: bucket,
 		BlobName:      req.Object,
 	}
 	qp, err := sasValues.SignWithSharedKey(cred)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	sasURL := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s?%s",
-		accountName, req.Bucket, req.Object, qp.Encode())
+		accountName, bucket, req.Object, qp.Encode())
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"url": sasURL})
+	jsonOK(w, map[string]string{"url": sasURL})
 }
 
 // DeleteAzureObject deletes a single Azure blob.
 func DeleteAzureObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	blobClient := containerClient.NewBlobClient(req.Object)
 	if _, err = blobClient.Delete(ctx, nil); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -503,44 +524,51 @@ func DeleteAzureObject(w http.ResponseWriter, r *http.Request) {
 // CopyAzureObject copies (and optionally deletes) an Azure blob — used for rename/move.
 func CopyAzureObject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Source      string `json:"source"`
-		Destination string `json:"destination"`
-		Delete      bool   `json:"delete_source"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Source       string `json:"source"`
+		Destination  string `json:"destination"`
+		Delete       bool   `json:"delete_source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	srcURL := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s",
-		accountName, req.Bucket, req.Source)
+		accountName, bucket, req.Source)
 	destBlobClient := containerClient.NewBlobClient(req.Destination)
 	if _, err = destBlobClient.StartCopyFromURL(ctx, srcURL, nil); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if req.Delete {
 		srcBlobClient := containerClient.NewBlobClient(req.Source)
 		if _, err = srcBlobClient.Delete(ctx, nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -550,39 +578,51 @@ func CopyAzureObject(w http.ResponseWriter, r *http.Request) {
 // UploadAzureObject uploads a file to Azure Blob Storage via multipart form.
 func UploadAzureObject(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	connIDStr := r.FormValue("connection_id")
 	bucketName := r.FormValue("bucket")
 	rawCreds := r.FormValue("credentials")
 	prefix := r.FormValue("prefix")
 
+	var connID int64
+	if connIDStr != "" {
+		connID, _ = strconv.ParseInt(connIDStr, 10, 64)
+	}
+
+	bucket, creds, err := resolveProviderCreds("azure", connID, bucketName, rawCreds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
-	accountName, accountKey, err := azureCredsFromJSON(rawCreds)
+	accountName, accountKey, err := azureCredsFromJSON(creds)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, bucketName)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -599,36 +639,42 @@ func UploadAzureObject(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"name": objectName})
+	jsonOK(w, map[string]string{"name": objectName})
 }
 
 // AzureBucketStats returns sampled object count and total size.
 func AzureBucketStats(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -651,8 +697,7 @@ func AzureBucketStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"object_count": count,
 		"total_size":   totalSize,
 		"truncated":    count == maxSample,
@@ -662,34 +707,41 @@ func AzureBucketStats(w http.ResponseWriter, r *http.Request) {
 // GetAzureMetadata returns full metadata for an Azure blob.
 func GetAzureMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Object      string `json:"object"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	blobClient := containerClient.NewBlobClient(req.Object)
 	resp, err := blobClient.GetProperties(ctx, nil)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -715,8 +767,7 @@ func GetAzureMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	md := fromAzureMetadata(resp.Metadata)
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	jsonOK(w, map[string]any{
 		"content_type":  contentType,
 		"cache_control": cacheControl,
 		"metadata":      md,
@@ -729,24 +780,33 @@ func GetAzureMetadata(w http.ResponseWriter, r *http.Request) {
 // DeletePrefixAzure deletes all blobs under a given prefix (recursive folder delete).
 func DeletePrefixAzure(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Bucket      string `json:"bucket"`
-		Credentials string `json:"credentials"`
-		Prefix      string `json:"prefix"`
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -757,24 +817,24 @@ func DeletePrefixAzure(w http.ResponseWriter, r *http.Request) {
 	for pager.More() {
 		page, pageErr := pager.NextPage(ctx)
 		if pageErr != nil {
-			http.Error(w, pageErr.Error(), http.StatusInternalServerError)
+			jsonError(w, pageErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		for _, blob := range page.Segment.BlobItems {
-			if blob.Name == nil {
+		for _, b := range page.Segment.BlobItems {
+			if b.Name == nil {
 				continue
 			}
-			containerClient.NewBlobClient(*blob.Name).Delete(ctx, nil)
+			containerClient.NewBlobClient(*b.Name).Delete(ctx, nil)
 			deleted++
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+	jsonOK(w, map[string]int{"deleted": deleted})
 }
 
 // UpdateAzureMetadata patches an Azure blob's metadata in-place (no copy-to-self needed).
 func UpdateAzureMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		ConnectionID int64             `json:"connection_id"`
 		Bucket       string            `json:"bucket"`
 		Credentials  string            `json:"credentials"`
 		Object       string            `json:"object"`
@@ -783,28 +843,33 @@ func UpdateAzureMetadata(w http.ResponseWriter, r *http.Request) {
 		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	accountName, accountKey, err := azureCredsFromJSON(req.Credentials)
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	containerClient, _, err := azureContainerClient(accountName, accountKey, req.Bucket)
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	blobClient := containerClient.NewBlobClient(req.Object)
 
-	// Update HTTP headers (ContentType, CacheControl)
 	headers := blob.HTTPHeaders{}
 	if req.ContentType != "" {
 		headers.BlobContentType = strPtr(req.ContentType)
@@ -813,18 +878,73 @@ func UpdateAzureMetadata(w http.ResponseWriter, r *http.Request) {
 		headers.BlobCacheControl = strPtr(req.CacheControl)
 	}
 	if _, err = blobClient.SetHTTPHeaders(ctx, headers, nil); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Update custom metadata
 	if req.Metadata != nil {
 		azMeta := toAzureMetadata(req.Metadata)
 		if _, err = blobClient.SetMetadata(ctx, azMeta, nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// CreateFolderAzure creates an empty "folder" blob (zero-byte blob with trailing slash).
+func CreateFolderAzure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Prefix       string `json:"prefix"`
+		Name         string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		jsonError(w, "folder name is required", http.StatusBadRequest)
+		return
+	}
+
+	folderKey := req.Prefix + strings.TrimSuffix(req.Name, "/") + "/"
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	containerClient, _, err := azureContainerClient(accountName, accountKey, bucket)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	blobClient := containerClient.NewBlockBlobClient(folderKey)
+	if _, err = blobClient.UploadBuffer(ctx, []byte{}, &blockblob.UploadBufferOptions{
+		HTTPHeaders: &blob.HTTPHeaders{BlobContentType: strPtr("application/x-directory")},
+	}); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"name": folderKey})
 }

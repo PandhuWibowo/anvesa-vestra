@@ -9,12 +9,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	awslib "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/PandhuWibowo/oss-portable/auth"
 	appdb "github.com/PandhuWibowo/oss-portable/db"
@@ -227,6 +231,8 @@ func GetJob(w http.ResponseWriter, r *http.Request) {
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 
+const maxConcurrentJobs = 3
+
 func getNextPendingJob() (*Job, error) {
 	var j Job
 	err := appdb.DB.QueryRow(
@@ -240,6 +246,26 @@ func getNextPendingJob() (*Job, error) {
 		return nil, err
 	}
 	return &j, nil
+}
+
+func getPendingJobs(limit int) ([]*Job, error) {
+	rows, err := appdb.DB.Query(
+		`SELECT id, type, status, payload, result, error, progress, user_id, created_at, updated_at
+		 FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(&j.ID, &j.Type, &j.Status, &j.Payload, &j.Result, &j.Error, &j.Progress, &j.UserID, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			continue
+		}
+		jobs = append(jobs, &j)
+	}
+	return jobs, nil
 }
 
 func updateJobStatus(id int64, status string, progress float64, result, errMsg string) {
@@ -257,22 +283,27 @@ func updateJobStatus(id int64, status string, progress float64, result, errMsg s
 	)
 }
 
-// StartJobWorker polls for pending jobs every 5 seconds and processes them.
+// StartJobWorker polls for pending jobs every 5 seconds and processes them concurrently.
 func StartJobWorker() {
 	log.Println("job worker started")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	sem := make(chan struct{}, maxConcurrentJobs)
+
 	for range ticker.C {
-		job, err := getNextPendingJob()
+		jobs, err := getPendingJobs(maxConcurrentJobs)
 		if err != nil {
 			log.Printf("job worker: poll error: %v", err)
 			continue
 		}
-		if job == nil {
-			continue
+		for _, job := range jobs {
+			sem <- struct{}{}
+			go func(j *Job) {
+				defer func() { <-sem }()
+				processJob(j)
+			}(job)
 		}
-		processJob(job)
 	}
 }
 
@@ -284,9 +315,9 @@ func processJob(job *Job) {
 	case "transfer":
 		executeTransferJob(job)
 	case "bulk_delete":
-		updateJobStatus(job.ID, "failed", 0, "", "bulk_delete not yet implemented")
+		executeBulkDeleteJob(job)
 	case "sync":
-		updateJobStatus(job.ID, "failed", 0, "", "sync not yet implemented")
+		executeSyncJobType(job)
 	default:
 		updateJobStatus(job.ID, "failed", 0, "", "unknown job type: "+job.Type)
 	}
@@ -371,4 +402,114 @@ func executeTransferJob(job *Job) {
 	resultJSON, _ := json.Marshal(map[string]string{"destination": destKey})
 	updateJobStatus(job.ID, "completed", 1.0, string(resultJSON), "")
 	log.Printf("job worker: job %d completed (destination=%s)", job.ID, destKey)
+}
+
+// ── Bulk delete job executor ──────────────────────────────────────────────────
+
+type bulkDeletePayload struct {
+	Provider     string   `json:"provider"`
+	ConnectionID int64    `json:"connection_id"`
+	Objects      []string `json:"objects"`
+}
+
+func executeBulkDeleteJob(job *Job) {
+	var p bulkDeletePayload
+	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
+		updateJobStatus(job.ID, "failed", 0, "", "invalid payload: "+err.Error())
+		return
+	}
+
+	table, ok := providerTable[p.Provider]
+	if !ok {
+		updateJobStatus(job.ID, "failed", 0, "", "unsupported provider: "+p.Provider)
+		return
+	}
+	bucket, creds, err := lookupConnection(table, p.ConnectionID)
+	if err != nil {
+		updateJobStatus(job.ID, "failed", 0, "", "connection error: "+err.Error())
+		return
+	}
+
+	ctx := context.Background()
+	deleted := 0
+	for i, obj := range p.Objects {
+		progress := float64(i) / float64(len(p.Objects))
+		updateJobStatus(job.ID, "running", progress, "", "")
+
+		if err := deleteProviderObject(ctx, p.Provider, bucket, creds, obj); err != nil {
+			log.Printf("bulk_delete: failed to delete %s: %v", obj, err)
+			continue
+		}
+		deleted++
+	}
+
+	resultJSON, _ := json.Marshal(map[string]int{"deleted": deleted, "total": len(p.Objects)})
+	updateJobStatus(job.ID, "completed", 1.0, string(resultJSON), "")
+}
+
+func deleteProviderObject(ctx context.Context, provider, bucket, creds, object string) error {
+	switch provider {
+	case "aws":
+		return deleteS3Object(ctx, bucket, creds, object, awsS3Client)
+	case "alibaba":
+		return deleteS3Object(ctx, bucket, creds, object, ossS3Client)
+	case "huawei":
+		return deleteS3Object(ctx, bucket, creds, object, obsS3Client)
+	case "gcp":
+		return deleteGCSObject(ctx, bucket, creds, object)
+	case "azure":
+		return deleteAzureBlobObject(ctx, bucket, creds, object)
+	default:
+		return fmt.Errorf("unsupported provider: %s", provider)
+	}
+}
+
+func deleteS3Object(ctx context.Context, bucket, credentialsJSON, object string, clientFn func(context.Context, map[string]string) (*s3.Client, error)) error {
+	creds, err := awsCredsFromJSON(credentialsJSON)
+	if err != nil {
+		return err
+	}
+	client, err := clientFn(ctx, creds)
+	if err != nil {
+		return err
+	}
+	_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: awslib.String(bucket),
+		Key:    awslib.String(object),
+	})
+	return err
+}
+
+func deleteGCSObject(ctx context.Context, bucket, credentials, object string) error {
+	client, err := gcpClient(ctx, credentials)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Bucket(bucket).Object(object).Delete(ctx)
+}
+
+func deleteAzureBlobObject(ctx context.Context, container, credentials, object string) error {
+	accountName, accountKey, err := azureCredsFromJSON(credentials)
+	if err != nil {
+		return err
+	}
+	containerClient, _, err := azureContainerClient(accountName, accountKey, container)
+	if err != nil {
+		return err
+	}
+	blobClient := containerClient.NewBlobClient(object)
+	_, err = blobClient.Delete(ctx, nil)
+	return err
+}
+
+// ── Sync job executor ─────────────────────────────────────────────────────────
+
+func executeSyncJobType(job *Job) {
+	var p transferPayload
+	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
+		updateJobStatus(job.ID, "failed", 0, "", "invalid payload: "+err.Error())
+		return
+	}
+	executeTransferJob(job)
 }

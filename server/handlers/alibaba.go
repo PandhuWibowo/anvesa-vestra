@@ -41,6 +41,8 @@ func ossS3Client(ctx context.Context, creds map[string]string) (*s3.Client, erro
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(provider),
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, err
@@ -97,4 +99,5 @@ var (
 	GetAlibabaMetadata   = Alibaba.GetMetadata()
 	UpdateAlibabaMetadata = Alibaba.UpdateMetadata()
 	DeletePrefixAlibaba  = Alibaba.DeletePrefix()
+	CreateFolderAlibaba  = Alibaba.CreateFolder()
 )

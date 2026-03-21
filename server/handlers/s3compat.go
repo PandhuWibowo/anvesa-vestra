@@ -51,21 +51,19 @@ func (p *S3Provider) ListConnections() http.HandlerFunc {
 		defer rows.Close()
 
 		type connection struct {
-			ID          int64     `json:"id"`
-			Name        string    `json:"name"`
-			Bucket      string    `json:"bucket"`
-			Credentials string    `json:"credentials"`
-			CreatedAt   time.Time `json:"created_at"`
+			ID        int64     `json:"id"`
+			Name      string    `json:"name"`
+			Bucket    string    `json:"bucket"`
+			CreatedAt time.Time `json:"created_at"`
 		}
 		conns := []connection{}
 		for rows.Next() {
 			var c connection
-			var created string
-			if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &c.Credentials, &created); err != nil {
+			var created, creds string
+			if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &creds, &created); err != nil {
 				jsonError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			c.Credentials, _ = decryptCredentials(c.Credentials)
 			var parseErr error
 			c.CreatedAt, parseErr = time.Parse(time.RFC3339, created)
 			if parseErr != nil {
@@ -752,6 +750,51 @@ func (p *S3Provider) DeletePrefix() http.HandlerFunc {
 			token = out.NextContinuationToken
 		}
 		jsonOK(w, map[string]int{"deleted": deleted})
+	}
+}
+
+func (p *S3Provider) CreateFolder() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			Prefix       string `json:"prefix"`
+			Name         string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			jsonError(w, "folder name is required", http.StatusBadRequest)
+			return
+		}
+
+		folderKey := req.Prefix + strings.TrimSuffix(req.Name, "/") + "/"
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		client, bucket, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if _, err = client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(folderKey),
+			Body:          bytes.NewReader([]byte{}),
+			ContentLength: aws.Int64(0),
+			ContentType:   aws.String("application/x-directory"),
+		}); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, map[string]string{"name": folderKey})
 	}
 }
 

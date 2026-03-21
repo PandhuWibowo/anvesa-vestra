@@ -36,7 +36,7 @@ type importPayload struct {
 }
 
 // ExportConnections exports all connections from all provider tables as JSON.
-// GET method only. Credentials are decrypted before export.
+// GET method only. Credentials are omitted — they must be re-entered on import.
 func ExportConnections(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -45,25 +45,21 @@ func ExportConnections(w http.ResponseWriter, r *http.Request) {
 
 	var connections []exportConnection
 	for provider, table := range providerTable {
-		rows, err := appdb.DB.Query(fmt.Sprintf("SELECT name, bucket, credentials FROM %s", table))
+		rows, err := appdb.DB.Query(fmt.Sprintf("SELECT name, bucket FROM %s", table))
 		if err != nil {
-			continue // skip tables that don't exist or fail
+			continue
 		}
 		for rows.Next() {
-			var name, bucket, credentials string
-			if err := rows.Scan(&name, &bucket, &credentials); err != nil {
+			var name, bucket string
+			if err := rows.Scan(&name, &bucket); err != nil {
 				rows.Close()
 				continue
-			}
-			decrypted, err := decryptCredentials(credentials)
-			if err != nil {
-				decrypted = credentials // fallback to raw on decrypt failure
 			}
 			connections = append(connections, exportConnection{
 				Provider:    provider,
 				Name:        name,
 				Bucket:      bucket,
-				Credentials: decrypted,
+				Credentials: "",
 			})
 		}
 		rows.Close()
