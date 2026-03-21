@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "dompurify": "^3.3.2",
+    "dompurify": "^3.3.3",
     "mammoth": "^1.11.0",
     "marked": "^17.0.3",
     "naive-ui": "^2",
