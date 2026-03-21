@@ -34,7 +34,7 @@ func testGDrive(folderID, credentialsJSON string) error {
 	}
 
 	// Try to get the folder metadata
-	f, err := srv.Files.Get(folderID).Fields("id, name, mimeType").Context(ctx).Do()
+	f, err := srv.Files.Get(folderID).Fields("id, name, mimeType").SupportsAllDrives(true).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("folder not accessible: %v", err)
 	}
@@ -226,7 +226,7 @@ func resolveParentID(ctx context.Context, srv *drive.Service, rootID, prefix str
 		}
 		q := fmt.Sprintf("'%s' in parents and name = '%s' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
 			currentID, strings.ReplaceAll(part, "'", "\\'"))
-		result, err := srv.Files.List().Q(q).Fields("files(id)").PageSize(1).Context(ctx).Do()
+		result, err := srv.Files.List().Q(q).Fields("files(id)").PageSize(1).SupportsAllDrives(true).IncludeItemsFromAllDrives(true).Context(ctx).Do()
 		if err != nil {
 			return "", fmt.Errorf("resolving path %q: %v", part, err)
 		}
@@ -270,7 +270,9 @@ func BrowseGDriveBucket(w http.ResponseWriter, r *http.Request) {
 	call := srv.Files.List().Q(q).
 		Fields("nextPageToken, files(id, name, mimeType, size, modifiedTime)").
 		PageSize(200).
-		OrderBy("folder,name")
+		OrderBy("folder,name").
+		SupportsAllDrives(true).
+		IncludeItemsFromAllDrives(true)
 	if req.PageToken != "" {
 		call = call.PageToken(req.PageToken)
 	}
@@ -349,7 +351,9 @@ func ListGDriveObjects(w http.ResponseWriter, r *http.Request) {
 		q := fmt.Sprintf("'%s' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'", req.Bucket)
 		call := srv.Files.List().Q(q).
 			Fields("nextPageToken, files(id, name, size, modifiedTime)").
-			PageSize(200)
+			PageSize(200).
+			SupportsAllDrives(true).
+			IncludeItemsFromAllDrives(true)
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
 		}
@@ -419,7 +423,7 @@ func GDriveDownloadURL(w http.ResponseWriter, r *http.Request) {
 	fileID := extractFileID(req.Object)
 
 	// Get file metadata to check if it's a Google Workspace file
-	f, err := srv.Files.Get(fileID).Fields("id, name, mimeType, webContentLink").Context(ctx).Do()
+	f, err := srv.Files.Get(fileID).Fields("id, name, mimeType, webContentLink").SupportsAllDrives(true).Context(ctx).Do()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -462,7 +466,7 @@ func DeleteGDriveObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fileID := extractFileID(req.Object)
-	if err := srv.Files.Delete(fileID).Context(ctx).Do(); err != nil {
+	if err := srv.Files.Delete(fileID).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -504,14 +508,14 @@ func CopyGDriveObject(w http.ResponseWriter, r *http.Request) {
 	if req.Delete {
 		// Rename = update the file name in-place
 		update := &drive.File{Name: newName}
-		if _, err := srv.Files.Update(sourceID, update).Context(ctx).Do(); err != nil {
+		if _, err := srv.Files.Update(sourceID, update).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	} else {
 		// Pure copy: copy the file with a new name
 		copyFile := &drive.File{Name: newName}
-		if _, err := srv.Files.Copy(sourceID, copyFile).Context(ctx).Do(); err != nil {
+		if _, err := srv.Files.Copy(sourceID, copyFile).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -565,7 +569,7 @@ func UploadGDriveObject(w http.ResponseWriter, r *http.Request) {
 		MimeType: mimeType,
 	}
 
-	created, err := srv.Files.Create(driveFile).Media(file).Context(ctx).Do()
+	created, err := srv.Files.Create(driveFile).SupportsAllDrives(true).Media(file).Context(ctx).Do()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -613,6 +617,7 @@ func GetGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 	fileID := extractFileID(req.Object)
 	f, err := srv.Files.Get(fileID).
 		Fields("id, name, mimeType, size, modifiedTime, description, starred, md5Checksum, webViewLink").
+		SupportsAllDrives(true).
 		Context(ctx).Do()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -679,7 +684,7 @@ func UpdateGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 		update.MimeType = req.ContentType
 	}
 
-	if _, err := srv.Files.Update(fileID, update).Context(ctx).Do(); err != nil {
+	if _, err := srv.Files.Update(fileID, update).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

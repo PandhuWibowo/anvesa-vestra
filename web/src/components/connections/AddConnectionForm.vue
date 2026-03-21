@@ -62,9 +62,37 @@
         <p v-else-if="provider === 'azure'" class="form-hint">
           "Container" is the Azure Blob container name. The <code style="font-family:var(--mono);font-size:11px">"account_key"</code> is the base64 key from the Azure portal → Storage account → Access keys.
         </p>
-        <p v-else-if="provider === 'gdrive'" class="form-hint">
-          Enter the Google Drive <strong>Folder ID</strong> from the URL (e.g. <code style="font-family:var(--mono);font-size:11px">1A2B3C...</code>). Share the folder with the service account email.
-        </p>
+        <div v-else-if="provider === 'gdrive'" class="gdrive-guide">
+          <div class="gdrive-guide__warning">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span><strong>Google Workspace required.</strong> Shared Drives are not available on personal Google accounts. Uploading to a personal "My Drive" folder will fail.</span>
+          </div>
+
+          <p class="gdrive-guide__label">Setup steps</p>
+          <ol class="gdrive-guide__steps">
+            <li>
+              <span class="gdrive-guide__step-title">Enable Google Drive API</span>
+              <span class="gdrive-guide__step-desc">Google Cloud Console → APIs &amp; Services → Library → search <em>Google Drive API</em> → Enable.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Create a Service Account &amp; download JSON key</span>
+              <span class="gdrive-guide__step-desc">IAM &amp; Admin → Service Accounts → Create → Keys → Add Key → JSON.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Create a Shared Drive</span>
+              <span class="gdrive-guide__step-desc">In Google Drive, click <em>Shared drives</em> in the sidebar → <em>New</em>.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Add service account as member</span>
+              <span class="gdrive-guide__step-desc">Right-click the Shared Drive → <em>Manage members</em> → add the <code>client_email</code> from the JSON with role <strong>Contributor</strong> or <strong>Content manager</strong>.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Copy the Folder ID</span>
+              <span class="gdrive-guide__step-desc">Open the Shared Drive or subfolder — the Folder ID is the last segment of the URL:</span>
+              <span class="gdrive-guide__url">drive.google.com/drive/folders/<strong>1AbCdEfGhIjKlMnOpQr</strong></span>
+            </li>
+          </ol>
+        </div>
         <p v-else-if="provider === 'wasabi'" class="form-hint">
           Region examples: <code style="font-family:var(--mono);font-size:11px">us-east-1</code>, <code style="font-family:var(--mono);font-size:11px">eu-central-1</code>, <code style="font-family:var(--mono);font-size:11px">ap-northeast-1</code>. Match the endpoint to your region.
         </p>

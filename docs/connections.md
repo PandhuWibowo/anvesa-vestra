@@ -58,6 +58,76 @@ If your bucket is publicly readable, leave the Credentials field empty. Anveesa 
 
 ---
 
+## Google Drive
+
+> **Requires Google Workspace.** Google Drive connections rely on the **Shared Drives** (Team Drives) feature, which is only available on Google Workspace accounts (Business Starter and above). Personal "My Drive" folders are **not supported** — service accounts have no storage quota, so uploads will fail with a `storageQuotaExceeded` error.
+
+### Prerequisites
+
+| Requirement | Details |
+|---|---|
+| Google Workspace account | Business Starter / Standard / Plus / Enterprise |
+| Google Drive API enabled | Enable in Google Cloud Console → APIs & Services → Library |
+| Shared Drive created | Create one under **Shared drives** in Google Drive |
+| Service account added to Shared Drive | Role: **Contributor** or **Content manager** |
+
+### Step 1 — Enable Google Drive API
+
+1. Open [Google Cloud Console → APIs & Services → Library](https://console.cloud.google.com/apis/library).
+2. Search for **Google Drive API** and click **Enable**.
+
+### Step 2 — Create a Service Account
+
+1. Go to **IAM & Admin → Service Accounts**.
+2. Click **Create Service Account**, fill in a name, and finish.
+3. Under **Keys**, click **Add Key → Create new key → JSON**.
+4. Download the `.json` file — this is your credential.
+
+### Step 3 — Create a Shared Drive and add the Service Account
+
+1. Open Google Drive → click **Shared drives** in the left sidebar → **New**.
+2. Give it a name and create it.
+3. Right-click the Shared Drive → **Manage members**.
+4. Add the service account email (found in the JSON as `client_email`) with role **Contributor** or **Content manager**.
+
+### Step 4 — Get the Folder ID
+
+The **Folder ID** is the part of the URL after `/folders/` when you open the Shared Drive or any subfolder:
+
+```
+https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWx
+                                        └─────── Folder ID ──────┘
+```
+
+You can use the Shared Drive root ID, or any subfolder ID within it.
+
+### Credential Format
+
+Paste the full contents of the downloaded service account JSON file:
+
+```json
+{
+  "type": "service_account",
+  "project_id": "my-project",
+  "private_key_id": "key-id",
+  "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n",
+  "client_email": "my-sa@my-project.iam.gserviceaccount.com",
+  "client_id": "123456789",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token"
+}
+```
+
+### Connection Fields
+
+| Field | Value |
+|---|---|
+| **Name** | Any label, e.g. `Team Drive` |
+| **Folder ID** | Shared Drive or subfolder ID from the URL |
+| **Credentials** | Full contents of the service account JSON file |
+
+---
+
 ## Amazon S3
 
 ### Credential Format
