@@ -33,12 +33,7 @@ func testGDrive(folderID, credentialsJSON string) error {
 		return err
 	}
 
-<<<<<<< HEAD
-	// Try to get the folder metadata
 	f, err := srv.Files.Get(folderID).Fields("id, name, mimeType").SupportsAllDrives(true).Context(ctx).Do()
-=======
-	f, err := srv.Files.Get(folderID).Fields("id, name, mimeType").Context(ctx).Do()
->>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 	if err != nil {
 		return fmt.Errorf("folder not accessible: %v", err)
 	}
@@ -439,12 +434,7 @@ func GDriveDownloadURL(w http.ResponseWriter, r *http.Request) {
 
 	fileID := extractFileID(req.Object)
 
-<<<<<<< HEAD
-	// Get file metadata to check if it's a Google Workspace file
 	f, err := srv.Files.Get(fileID).Fields("id, name, mimeType, webContentLink").SupportsAllDrives(true).Context(ctx).Do()
-=======
-	f, err := srv.Files.Get(fileID).Fields("id, name, mimeType, webContentLink").Context(ctx).Do()
->>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -491,13 +481,8 @@ func DeleteGDriveObject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fileID := extractFileID(req.Object)
-<<<<<<< HEAD
 	if err := srv.Files.Delete(fileID).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-=======
-	if err := srv.Files.Delete(fileID).Context(ctx).Do(); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
->>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -542,24 +527,14 @@ func CopyGDriveObject(w http.ResponseWriter, r *http.Request) {
 
 	if req.Delete {
 		update := &drive.File{Name: newName}
-<<<<<<< HEAD
 		if _, err := srv.Files.Update(sourceID, update).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-=======
-		if _, err := srv.Files.Update(sourceID, update).Context(ctx).Do(); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
->>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 			return
 		}
 	} else {
 		copyFile := &drive.File{Name: newName}
-<<<<<<< HEAD
 		if _, err := srv.Files.Copy(sourceID, copyFile).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-=======
-		if _, err := srv.Files.Copy(sourceID, copyFile).Context(ctx).Do(); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
->>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 			return
 		}
 	}
@@ -747,13 +722,8 @@ func UpdateGDriveMetadata(w http.ResponseWriter, r *http.Request) {
 		update.MimeType = req.ContentType
 	}
 
-<<<<<<< HEAD
 	if _, err := srv.Files.Update(fileID, update).SupportsAllDrives(true).Context(ctx).Do(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-=======
-	if _, err := srv.Files.Update(fileID, update).Context(ctx).Do(); err != nil {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
->>>>>>> 37b4809 (feat(transfer): make seamless transfer feature)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
