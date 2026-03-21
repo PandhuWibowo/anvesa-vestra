@@ -12,13 +12,15 @@ No toolchain needed. Pull the pre-built image and run it:
 docker run -d \
   --name anveesa-vestra \
   -p 80:80 \
+  -e JWT_SECRET=your-secret-here \
+  -e ENCRYPTION_KEY=your-encryption-key \
   -v anveesa-data:/data \
   pandhuwibowo/anveesa-vestra:latest
 ```
 
-Open [http://localhost](http://localhost) in your browser, then jump straight to [step 4](#add-your-first-connection).
+Open [http://localhost](http://localhost) in your browser. On first launch you will be prompted to **create an admin account** — see [Authentication](./authentication.md) for details.
 
-The `-v anveesa-data:/data` flag persists your SQLite database across container restarts. See [Deployment](./deployment.md) for more Docker options.
+The `-v anveesa-data:/data` flag persists your SQLite database across container restarts. See [Deployment](./deployment.md) for more Docker options and environment variables.
 
 ---
 
@@ -59,11 +61,13 @@ This command starts both the Go backend (port **8080**) and the Vite dev server 
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
+> By default, authentication is enabled. On first launch you will see the **Create Admin Account** screen. Enter a username and password (min 8 characters) to create your admin account. See [Authentication](./authentication.md) for configuration options.
+
 ---
 
 ## Add Your First Connection
 
-When the app loads you will see the welcome screen. Click **New Connection** to open the connection form. Select a provider card, fill in the fields, and click **Test Connection** before saving.
+After logging in, you will see the welcome screen. Click **New Connection** to open the connection form. Select a provider card, fill in the fields, and click **Test Connection** before saving.
 
 ### Google Cloud Storage
 
@@ -146,6 +150,17 @@ For Cloudflare R2 or MinIO, add an `"endpoint"` key — see [Managing Connection
 
 > Find the account key in the Azure Portal → Storage account → **Security + networking → Access keys**.
 
+### Google Drive
+
+1. Select the **Google Drive** card.
+2. Enter a **Connection name** (e.g. `team-drive-docs`).
+3. Enter the **Folder ID** as the bucket name. This is the long string in the Google Drive folder URL: `https://drive.google.com/drive/folders/{FOLDER_ID}`.
+4. Paste your **Service account JSON** key into the Credentials field. The service account must have access to the folder (share the folder with the service account email).
+5. Click **Test Connection** — a green notice confirms the folder is accessible.
+6. Click **Save**.
+
+> See [Managing Connections — Google Drive](./connections.md#google-drive) for detailed credential setup.
+
 ---
 
 ## Browse Your Bucket
@@ -168,28 +183,51 @@ anveesa-vestra/
 │   ├── main.go          Route definitions and server startup
 │   ├── db/              SQLite schema and initialization
 │   ├── handlers/        Request handlers per provider
-│   │   ├── gcp.go
-│   │   ├── aws.go
-│   │   ├── huawei.go
-│   │   ├── alibaba.go
-│   │   └── azure.go
-│   └── middleware/      CORS middleware
+│   │   ├── gcp.go       Google Cloud Storage
+│   │   ├── aws.go       Amazon S3 / R2 / MinIO
+│   │   ├── azure.go     Azure Blob Storage
+│   │   ├── alibaba.go   Alibaba Cloud OSS
+│   │   ├── huawei.go    Huawei OBS
+│   │   ├── gdrive.go    Google Drive
+│   │   ├── auth.go      Authentication (login, register)
+│   │   ├── shared.go    Shared links
+│   │   ├── jobs.go      Background jobs
+│   │   ├── webhooks.go  Webhook management
+│   │   ├── audit.go     Audit logging
+│   │   ├── analytics.go Dashboard analytics
+│   │   ├── search.go    Cross-provider search
+│   │   └── ...          Transfer, zip, proxy, health
+│   └── middleware/      CORS, Auth, Rate limiting
 ├── web/                 Vue 3 frontend
 │   ├── src/
 │   │   ├── App.vue              Root component and navigation logic
 │   │   ├── components/          UI and feature components
+│   │   │   ├── connections/     Browser + connection form
+│   │   │   ├── views/           Dashboard, search, audit, jobs, webhooks
+│   │   │   ├── auth/            Login / registration screen
+│   │   │   └── ui/              Reusable UI components
 │   │   └── composables/         Shared state and API logic
 │   └── vite.config.js           Dev server and proxy config
 ├── docs/                This documentation
 ├── deploy/              Container runtime configuration
-│   ├── nginx.conf       nginx: serve frontend + proxy /api to Go server
-│   └── supervisord.conf Process manager: runs nginx and Go server together
-├── .github/
-│   └── workflows/
-│       └── docker.yml   CI/CD: build and push Docker image to DockerHub
 ├── Dockerfile           Multi-stage image build (bun → go → nginx)
 └── Makefile             Dev and build commands
 ```
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8080` | Backend server port |
+| `DB_PATH` | `data.db` | SQLite database file path |
+| `AUTH_ENABLED` | `true` | Enable/disable login requirement |
+| `JWT_SECRET` | `change-me-in-production` | JWT signing key |
+| `ENCRYPTION_KEY` | *(auto-generated)* | AES key for credential encryption |
+| `CORS_ORIGIN` | `*` | Allowed CORS origin |
+
+See [Authentication](./authentication.md) and [Deployment](./deployment.md) for full details.
 
 ---
 
@@ -197,7 +235,16 @@ anveesa-vestra/
 
 | Key | Action |
 |---|---|
-| `Escape` | Close modals and dialogs |
-| `/` | Focus the file search box (inside the browser) |
-| `R` | Refresh the current bucket listing |
+| `j` / `↓` | Move focus to next row |
+| `k` / `↑` | Move focus to previous row |
+| `Enter` | Open folder or preview file |
+| `Space` | Toggle preview |
+| `f` | Toggle fullscreen preview |
+| `d` | Download focused file |
+| `Delete` | Delete focused file/folder |
+| `/` | Focus search box |
+| `r` | Refresh current folder |
 | `Backspace` | Navigate up one folder level |
+| `Escape` | Exit fullscreen / close panel / clear search |
+| `n` | New connection |
+| `?` | Show all shortcuts |

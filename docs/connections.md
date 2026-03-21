@@ -9,7 +9,7 @@ A **connection** is a named reference to a bucket along with the credentials nee
 | Field | Required | Description |
 |---|---|---|
 | Name | Yes | A human-readable label shown in the sidebar |
-| Provider | Yes | `gcp`, `aws`, `huawei`, `alibaba`, or `azure` — set on creation, cannot be changed |
+| Provider | Yes | `gcp`, `aws`, `huawei`, `alibaba`, `azure`, or `gdrive` — set on creation, cannot be changed |
 | Bucket | Yes | The bucket (or container) name without any protocol prefix |
 | Credentials | Depends | JSON credentials object — format varies per provider |
 
@@ -289,6 +289,50 @@ MinIO also uses the S3-compatible API. Use your MinIO server's address as the en
 
 ---
 
+## Google Drive
+
+Google Drive connections use the Drive API v3 with a service account.
+
+### Obtaining a Service Account Key
+
+1. Enable the **Google Drive API** in [Google Cloud Console → APIs & Services](https://console.cloud.google.com/apis/library/drive.googleapis.com).
+2. Create a service account (or reuse your GCS service account).
+3. Under **Keys**, create a new JSON key and download it.
+
+### Sharing the Folder
+
+The service account email (e.g. `my-sa@project.iam.gserviceaccount.com`) must have access to the target folder:
+
+1. Open Google Drive in a browser.
+2. Right-click the folder → **Share**.
+3. Add the service account email as an **Editor**.
+
+### Connection Fields
+
+| Field | Value |
+|---|---|
+| Bucket | The **Folder ID** from the URL: `https://drive.google.com/drive/folders/{FOLDER_ID}` |
+| Credentials | The full service account JSON key |
+
+### Credentials JSON
+
+Paste the entire service account JSON key (same format as GCS):
+
+```json
+{
+  "type": "service_account",
+  "project_id": "my-project",
+  "private_key_id": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+  "client_email": "my-sa@my-project.iam.gserviceaccount.com",
+  ...
+}
+```
+
+> Google Drive connections support browse, upload, download, delete, and rename. Folder-level delete (delete-prefix) is not supported.
+
+---
+
 ## Testing a Connection
 
 Before saving, click **Test Connection**. The backend verifies access by performing a lightweight bucket/container probe:
@@ -300,6 +344,7 @@ Before saving, click **Test Connection**. The backend verifies access by perform
 | Huawei OBS | List bucket metadata |
 | Alibaba OSS | `GetBucketInfo` |
 | Azure | List containers / check container existence |
+| Google Drive | Verify folder ID exists and is accessible |
 
 A green notice confirms success. A red notice shows the error returned by the cloud provider.
 
@@ -317,8 +362,24 @@ Click the **× icon** next to a connection in the sidebar. A confirmation dialog
 
 ---
 
+## Export & Import
+
+You can backup and restore all connections using the sidebar buttons.
+
+### Export
+
+Click the **Export** button in the sidebar footer. All connections (with decrypted credentials) are downloaded as `anveesa-connections.json`.
+
+### Import
+
+Click the **Import** button and select a previously exported JSON file. The imported connections are added to the database. A success toast shows how many connections were imported.
+
+> Exported files contain plaintext credentials. Store them securely.
+
+---
+
 ## Data Storage
 
-Connections are stored in `server/data.db` (SQLite). This file is created automatically on first run and is excluded from version control via `.gitignore`.
+Connections are stored in `server/data.db` (SQLite). This file is created automatically on first run and is excluded from version control via `.gitignore`. Credentials are encrypted at rest using the `ENCRYPTION_KEY` environment variable.
 
 **Back up this file** if you want to preserve your connections across reinstalls.

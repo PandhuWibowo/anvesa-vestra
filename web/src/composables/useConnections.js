@@ -1,12 +1,15 @@
 import { ref } from 'vue'
+import { useAuth } from './useAuth.js'
+
+const connections = ref([])
+const loading     = ref(false)
+const testing     = ref(false)
+const saving      = ref(false)
+const error       = ref('')
+const notice      = ref('')
 
 export function useConnections() {
-  const connections = ref([])
-  const loading     = ref(false)
-  const testing     = ref(false)
-  const saving      = ref(false)
-  const error       = ref('')
-  const notice      = ref('')
+  const { authHeaders } = useAuth()
 
   function clearMessages() { error.value = ''; notice.value = '' }
 
@@ -26,12 +29,12 @@ export function useConnections() {
     clearMessages()
     try {
       const [gcpRes, awsRes, huaweiRes, alibabaRes, azureRes, gdriveRes] = await Promise.all([
-        fetch('/api/gcp/connections').then(r => r.ok ? r.json() : []),
-        fetch('/api/aws/connections').then(r => r.ok ? r.json() : []),
-        fetch('/api/huawei/connections').then(r => r.ok ? r.json() : []),
-        fetch('/api/alibaba/connections').then(r => r.ok ? r.json() : []),
-        fetch('/api/azure/connections').then(r => r.ok ? r.json() : []),
-        fetch('/api/gdrive/connections').then(r => r.ok ? r.json() : []),
+        fetch('/api/gcp/connections', { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
+        fetch('/api/aws/connections', { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
+        fetch('/api/huawei/connections', { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
+        fetch('/api/alibaba/connections', { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
+        fetch('/api/azure/connections', { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
+        fetch('/api/gdrive/connections', { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
       ])
       const gcpList     = (gcpRes     || []).map(c => ({ ...c, provider: 'gcp' }))
       const awsList     = (awsRes     || []).map(c => ({ ...c, provider: 'aws' }))
@@ -53,7 +56,7 @@ export function useConnections() {
     try {
       const res = await fetch(BASE[provider] + '/test', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body:    JSON.stringify({ bucket, credentials }),
       })
       if (!res.ok) error.value = 'Test failed: ' + await res.text()
@@ -71,7 +74,7 @@ export function useConnections() {
     try {
       const res = await fetch(BASE[provider] + '/connection', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body:    JSON.stringify(form),
       })
       if (!res.ok) { error.value = 'Save failed: ' + await res.text(); return false }
@@ -92,7 +95,7 @@ export function useConnections() {
     try {
       const res = await fetch(`${BASE[provider]}/connection/${id}`, {
         method:  'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body:    JSON.stringify(form),
       })
       if (!res.ok) { error.value = 'Update failed: ' + await res.text(); return false }
@@ -110,7 +113,7 @@ export function useConnections() {
   async function removeConnection(provider, id) {
     clearMessages()
     try {
-      const res = await fetch(`${BASE[provider]}/connection/${id}`, { method: 'DELETE' })
+      const res = await fetch(`${BASE[provider]}/connection/${id}`, { method: 'DELETE', headers: authHeaders() })
       if (res.ok) await fetchConnections()
     } catch (err) {
       error.value = 'Delete failed: ' + err.message
@@ -122,7 +125,7 @@ export function useConnections() {
   async function browseObjects(provider, bucket, credentials, prefix = '', pageToken = '') {
     const res = await fetch(BASE[provider] + '/bucket/browse', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, prefix, page_token: pageToken }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -132,18 +135,29 @@ export function useConnections() {
   async function getDownloadURL(provider, bucket, credentials, object) {
     const res = await fetch(BASE[provider] + '/bucket/download', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, object }),
     })
     if (!res.ok) throw new Error(await res.text())
     return (await res.json()).url
   }
 
+  // proxyDownload: fetch file content through the backend to avoid CORS issues
+  async function proxyDownload(provider, bucket, credentials, object) {
+    const res = await fetch('/api/proxy/download', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify({ provider, bucket, credentials, object }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res
+  }
+
   // presignUrl: like getDownloadURL but with a custom expiry (seconds)
   async function presignUrl(provider, bucket, credentials, object, expiresIn) {
     const res = await fetch(BASE[provider] + '/bucket/download', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, object, expires_in: expiresIn }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -154,7 +168,7 @@ export function useConnections() {
   async function zipDownload(provider, bucket, credentials, prefix, objects) {
     const res = await fetch('/api/zip', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ provider, bucket, credentials, prefix: prefix ?? '', objects: objects ?? [] }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -164,7 +178,7 @@ export function useConnections() {
   async function deleteObject(provider, bucket, credentials, object) {
     const res = await fetch(BASE[provider] + '/bucket/delete', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, object }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -173,7 +187,7 @@ export function useConnections() {
   async function copyObject(provider, bucket, credentials, source, destination, deleteSource = true) {
     const res = await fetch(BASE[provider] + '/bucket/copy', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, source, destination, delete_source: deleteSource }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -186,7 +200,7 @@ export function useConnections() {
       form.append('credentials', credentials)
       form.append('prefix',      prefix)
       form.append('file',        file)
-      return fetch(BASE[provider] + '/bucket/upload', { method: 'POST', body: form }).then(r => {
+      return fetch(BASE[provider] + '/bucket/upload', { method: 'POST', headers: authHeaders(), body: form }).then(r => {
         if (!r.ok) return r.text().then(t => { throw new Error(t) })
       })
     }))
@@ -195,7 +209,7 @@ export function useConnections() {
   async function deletePrefix(provider, bucket, credentials, prefix) {
     const res = await fetch(BASE[provider] + '/bucket/delete-prefix', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, prefix }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -207,7 +221,7 @@ export function useConnections() {
     // dst: { provider, bucket, credentials, prefix }
     const res = await fetch('/api/transfer', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({
         src_provider:    src.provider,
         src_bucket:      src.bucket,
@@ -240,6 +254,8 @@ export function useConnections() {
       })
       xhr.addEventListener('error', () => reject(new Error('Network error')))
       xhr.open('POST', BASE[provider] + '/bucket/upload')
+      const auth = authHeaders()
+      if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization)
       xhr.send(form)
     })
   }
@@ -247,7 +263,7 @@ export function useConnections() {
   async function getBucketStats(provider, bucket, credentials) {
     const res = await fetch(BASE[provider] + '/bucket/stats', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -259,7 +275,7 @@ export function useConnections() {
   async function getObjectMetadata(provider, bucket, credentials, object) {
     const res = await fetch(BASE[provider] + '/bucket/metadata', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, object }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -269,7 +285,7 @@ export function useConnections() {
   async function updateObjectMetadata(provider, bucket, credentials, object, patch) {
     const res = await fetch(BASE[provider] + '/bucket/metadata/update', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials, object, ...patch }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -280,7 +296,7 @@ export function useConnections() {
   async function listObjects(provider, bucket, credentials) {
     const res = await fetch(BASE[provider] + '/bucket/objects', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body:    JSON.stringify({ bucket, credentials }),
     })
     if (!res.ok) throw new Error(await res.text())
@@ -292,7 +308,7 @@ export function useConnections() {
     connections, loading, testing, saving, error, notice,
     fetchConnections, testConnection, saveConnection, updateConnection,
     removeConnection, clearMessages,
-    browseObjects, getDownloadURL, presignUrl, zipDownload, deleteObject, copyObject,
+    browseObjects, getDownloadURL, proxyDownload, presignUrl, zipDownload, deleteObject, copyObject,
     uploadObjects, uploadObjectWithProgress,
     deletePrefix, transferObject,
     getBucketStats, listObjects,

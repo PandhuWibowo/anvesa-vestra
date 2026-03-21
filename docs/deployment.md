@@ -14,11 +14,14 @@ A pre-built image is published to DockerHub on every push to `main`. It bundles 
 docker run -d \
   --name anveesa-vestra \
   -p 80:80 \
+  -e AUTH_ENABLED=true \
+  -e JWT_SECRET=your-secret-here \
+  -e ENCRYPTION_KEY=your-encryption-key \
   -v anveesa-data:/data \
   pandhuwibowo/anveesa-vestra:latest
 ```
 
-Open [http://localhost](http://localhost) in your browser.
+Open [http://localhost](http://localhost) in your browser. On first launch, create your admin account (see [Authentication](./authentication.md)).
 
 | Flag | Purpose |
 |---|---|
@@ -183,6 +186,9 @@ Type=simple
 User=www-data
 WorkingDirectory=/opt/anveesa-vestra
 ExecStart=/opt/anveesa-vestra/bin/server
+Environment=JWT_SECRET=your-secret-here
+Environment=ENCRYPTION_KEY=your-encryption-key
+Environment=DB_PATH=/opt/anveesa-vestra/data.db
 Restart=on-failure
 RestartSec=5
 
@@ -236,7 +242,7 @@ The SQLite database file (`server/data.db`) holds all saved connections. In prod
 
 - **Writable** by the user running the server process
 - **Backed up** regularly — losing it means losing all saved connections (not bucket data)
-- **Not publicly accessible** — it contains credentials in plaintext
+- **Not publicly accessible** — it contains encrypted credentials
 
 ---
 
@@ -244,7 +250,17 @@ The SQLite database file (`server/data.db`) holds all saved connections. In prod
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `8080` | HTTP listening port (requires code support) |
+| `PORT` | `8080` | HTTP listening port |
+| `DB_PATH` | `data.db` | SQLite database file path |
+| `CORS_ORIGIN` | `*` | Allowed CORS origin (set to your domain in production) |
+| `AUTH_ENABLED` | `true` | Enable/disable login requirement |
+| `JWT_SECRET` | `change-me-in-production` | HMAC-SHA256 signing key for JWT tokens |
+| `JWT_EXPIRY` | `24h` | Token lifetime (e.g. `1h`, `12h`, `7d`) |
+| `ENCRYPTION_KEY` | *(auto-generated)* | AES key for encrypting stored credentials |
+
+> **Security**: Always set `JWT_SECRET` and `ENCRYPTION_KEY` to unique, strong values in production. The defaults are insecure and intended for development only.
+
+See [Authentication](./authentication.md) for details on the auth system.
 
 ---
 

@@ -3,20 +3,23 @@ package middleware
 import "net/http"
 
 // AllowCORS sets CORS headers on a response writer.
-func AllowCORS(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+func AllowCORS(w http.ResponseWriter, origin string) {
+	if origin == "" {
+		origin = "*"
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Max-Age", "86400")
 }
 
 // CORS returns a middleware that handles preflight OPTIONS requests
 // and sets CORS headers on all other requests.
-func CORS(next http.HandlerFunc) http.HandlerFunc {
+func CORS(origin string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		AllowCORS(w)
+		AllowCORS(w, origin)
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next(w, r)

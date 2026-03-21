@@ -206,10 +206,21 @@ Light and dark mode are switched by toggling `data-theme="light"` on `:root`.
 
 ## Reporting Issues
 
-Open an issue on GitHub with:
+Open an issue on [GitHub](https://github.com/PandhuWibowo/anveesa-vestra/issues) with:
 - Steps to reproduce
 - Expected behaviour
 - Actual behaviour
 - Go version (`go version`) and browser + OS
 
 Do not include cloud credentials or bucket names in issue reports.
+
+---
+
+## Community
+
+| | |
+|---|---|
+| GitHub | [github.com/PandhuWibowo/anveesa-vestra](https://github.com/PandhuWibowo/anveesa-vestra) |
+| Website | [anveesa.com](https://anveesa.com) |
+
+Visit [anveesa.com](https://anveesa.com) for announcements, guides, and community discussions.

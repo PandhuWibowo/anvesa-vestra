@@ -5,9 +5,15 @@ web/node_modules/
 web/.vite/
 web/bun.lockb
 server/data.db
+server/data.db-shm
+server/data.db-wal
+server/data.db-journal
 *.log
 *.exe
 *.tmp
 */*.db
+*/*.db-shm
+*/*.db-wal
+*/*.db-journal
 bin/
 _prompts/

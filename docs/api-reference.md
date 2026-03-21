@@ -14,7 +14,98 @@ http://localhost:8080
 
 ## Authentication
 
-The API has no authentication layer of its own — it is designed to run on localhost or a private network. Protect the server with a firewall, reverse proxy authentication, or VPN if you expose it beyond localhost.
+When `AUTH_ENABLED=true` (the default), most endpoints require a valid JWT in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+Obtain a token by calling `POST /api/auth/login`. Endpoints marked **Public** do not require a token.
+
+A **rate limiter** (20 requests/second per IP, burst of 60) is applied to all endpoints.
+
+---
+
+## Auth Endpoints
+
+### Check Setup Status
+
+```
+GET /api/auth/setup-status
+```
+**Public** — Returns whether auth is enabled and whether the initial admin account has been created.
+
+**Response**
+```json
+{
+  "auth_enabled": true,
+  "setup_required": true
+}
+```
+
+---
+
+### Register Admin
+
+```
+POST /api/auth/register
+```
+**Public** — Creates the first admin account. Returns `403` if an account already exists.
+
+**Request Body**
+```json
+{
+  "username": "admin",
+  "password": "my-secure-password"
+}
+```
+
+**Response** `200 OK`
+```json
+{ "ok": true }
+```
+
+---
+
+### Login
+
+```
+POST /api/auth/login
+```
+**Public** — Authenticates with username and password, returns a JWT.
+
+**Request Body**
+```json
+{
+  "username": "admin",
+  "password": "my-secure-password"
+}
+```
+
+**Response** `200 OK`
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+---
+
+### Get Current User
+
+```
+GET /api/auth/me
+```
+**Protected** — Validates the JWT and returns the current user.
+
+**Response** `200 OK`
+```json
+{
+  "id": 1,
+  "username": "admin",
+  "role": "admin"
+}
+```
 
 ---
 
@@ -303,6 +394,38 @@ The `/api/azure/bucket/download` endpoint accepts the optional `expires_in` fiel
 
 ---
 
+## Google Drive Endpoints
+
+Google Drive endpoints follow the same pattern under `/api/gdrive/`. See [Managing Connections](./connections.md#google-drive) for credential setup. The "bucket" field is a Google Drive **folder ID**.
+
+### Connections
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/gdrive/connections` | List saved Google Drive connections |
+| `POST` | `/api/gdrive/connection` | Create Google Drive connection |
+| `PUT` | `/api/gdrive/connection/{id}` | Update Google Drive connection |
+| `DELETE` | `/api/gdrive/connection/{id}` | Delete Google Drive connection |
+| `POST` | `/api/gdrive/test` | Test service account access to the folder |
+
+### File Operations
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/gdrive/bucket/browse` | Browse files in folder (paginated) |
+| `POST` | `/api/gdrive/bucket/upload` | Upload file (multipart form) |
+| `GET` | `/api/gdrive/bucket/download` | Get download URL |
+| `DELETE` | `/api/gdrive/bucket/delete` | Delete file |
+| `POST` | `/api/gdrive/bucket/copy` | Rename file |
+| `GET` | `/api/gdrive/bucket/stats` | Folder statistics |
+| `GET` | `/api/gdrive/bucket/metadata` | Get file metadata |
+| `PUT` | `/api/gdrive/bucket/metadata/update` | Update file metadata |
+| `POST` | `/api/gdrive/bucket/objects` | List objects with pagination |
+
+> Google Drive does not support `delete-prefix` (recursive folder delete).
+
+---
+
 ## Cross-Provider Endpoints
 
 These endpoints operate across providers and are not scoped to a single provider prefix.
@@ -332,7 +455,7 @@ Downloads an object from a source connection and uploads it to a destination con
 
 | Field | Description |
 |---|---|
-| `src_provider` | Source provider: `gcp`, `aws`, `huawei`, `alibaba`, or `azure` |
+| `src_provider` | Source provider: `gcp`, `aws`, `huawei`, `alibaba`, `azure`, or `gdrive` |
 | `src_bucket` | Source bucket or container name |
 | `src_credentials` | JSON-encoded credentials for the source |
 | `src_object` | Full object key in the source bucket |
@@ -346,7 +469,36 @@ Downloads an object from a source connection and uploads it to a destination con
 { "destination": "backups/file.txt" }
 ```
 
-The `destination` field is the full object key of the file in the destination bucket.
+---
+
+### Bulk Transfer
+
+```
+POST /api/transfer/bulk
+```
+
+Transfers multiple objects across connections as a background job. Each object is downloaded from the source and uploaded to the destination. Returns immediately with a job ID.
+
+**Request Body**
+```json
+{
+  "src_provider":    "aws",
+  "src_bucket":      "source-bucket",
+  "src_credentials": "...",
+  "dst_provider":    "gcp",
+  "dst_bucket":      "dest-bucket",
+  "dst_credentials": "...",
+  "dst_prefix":      "backup/",
+  "objects":         ["file1.txt", "data/file2.csv", "images/photo.jpg"]
+}
+```
+
+**Response** `200 OK`
+```json
+{ "job_id": 42 }
+```
+
+Monitor progress via `GET /api/jobs/42`.
 
 ---
 
@@ -383,7 +535,7 @@ Streams a `.zip` archive of objects to the client. The archive name is derived f
 
 | Field | Required | Description |
 |---|---|---|
-| `provider` | Yes | `gcp`, `aws`, `huawei`, `alibaba`, or `azure` |
+| `provider` | Yes | `gcp`, `aws`, `huawei`, `alibaba`, `azure`, or `gdrive` |
 | `bucket` | Yes | Bucket or container name |
 | `credentials` | Yes | JSON-encoded credentials |
 | `prefix` | No | If set and `objects` is empty, all objects under this prefix are included |
@@ -398,6 +550,363 @@ Files that fail to download during zipping are silently skipped; the remaining f
 
 ---
 
+### Proxy Download
+
+```
+POST /api/proxy/download
+```
+
+Downloads a file through the server and streams it to the client. Used by the frontend for file preview (avoids CORS issues with direct presigned URLs).
+
+**Request Body**
+```json
+{
+  "provider":    "aws",
+  "bucket":      "my-bucket",
+  "credentials": "...",
+  "object":      "path/to/file.txt"
+}
+```
+
+**Response** — binary file stream with appropriate `Content-Type` header.
+
+---
+
+### Search
+
+```
+POST /api/search
+```
+
+Search for objects by prefix across connections. Filter by provider and/or connection.
+
+**Request Body**
+```json
+{
+  "query":         "report",
+  "provider":      "aws",
+  "connection_id": 3
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `query` | Yes | Prefix or path substring to search for |
+| `provider` | No | Filter to a specific provider |
+| `connection_id` | No | Filter to a specific connection |
+
+**Response**
+```json
+[
+  {
+    "connection_id": 3,
+    "connection_name": "prod-s3",
+    "provider": "aws",
+    "key": "reports/2024/report-q1.csv",
+    "size": 102400,
+    "updated": "2024-03-15T10:00:00Z"
+  }
+]
+```
+
+---
+
+## Shared Links
+
+### Create Shared Link
+
+```
+POST /api/share
+```
+
+Generates a public download link for an object.
+
+**Request Body**
+```json
+{
+  "provider":      "gcp",
+  "bucket":        "my-bucket",
+  "credentials":   "...",
+  "object":        "docs/guide.pdf",
+  "expires_hours": 168,
+  "max_downloads": 100,
+  "password":      ""
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `expires_hours` | No | Link expiry in hours (default: 168 = 7 days) |
+| `max_downloads` | No | Maximum number of downloads allowed (0 = unlimited) |
+| `password` | No | Optional password to protect the download |
+
+**Response** `200 OK`
+```json
+{
+  "token": "abc123def456",
+  "url": "/api/share/abc123def456"
+}
+```
+
+---
+
+### Access Shared Link
+
+```
+GET /api/share/{token}
+```
+**Public** — Downloads the shared file. If the link is expired, at the download limit, or password-protected and no password is supplied, returns an error.
+
+---
+
+### List Shared Links
+
+```
+GET /api/shares
+```
+
+Returns all shared links with download counts, expiry dates, and metadata.
+
+---
+
+### Delete Shared Link
+
+```
+DELETE /api/shares/{id}
+```
+
+Revokes a shared link.
+
+---
+
+## Background Jobs
+
+### Create Job
+
+```
+POST /api/jobs
+```
+
+Creates a background job (used internally by bulk transfer).
+
+---
+
+### List Jobs
+
+```
+GET /api/jobs
+```
+
+Returns all background jobs with status, progress, and timestamps.
+
+**Response**
+```json
+[
+  {
+    "id": 1,
+    "type": "bulk_transfer",
+    "status": "running",
+    "progress": 45,
+    "created_at": "2024-06-01T10:00:00Z",
+    "started_at": "2024-06-01T10:00:01Z",
+    "completed_at": null,
+    "error": ""
+  }
+]
+```
+
+---
+
+### Get Job Details
+
+```
+GET /api/jobs/{id}
+```
+
+Returns full job details including result data and payload.
+
+---
+
+## Webhooks
+
+### List Webhooks
+
+```
+GET /api/webhooks
+```
+
+Returns all configured webhooks.
+
+**Response**
+```json
+[
+  {
+    "id": 1,
+    "url": "https://hooks.example.com/anveesa",
+    "events": ["upload", "delete"],
+    "created_at": "2024-06-01T10:00:00Z"
+  }
+]
+```
+
+---
+
+### Create Webhook
+
+```
+POST /api/webhooks
+```
+
+**Request Body**
+```json
+{
+  "url": "https://hooks.example.com/anveesa",
+  "events": ["upload", "download", "delete", "transfer", "share"],
+  "secret": "my-hmac-secret"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `url` | Yes | HTTP(S) endpoint URL |
+| `events` | Yes | Array of event types to subscribe to |
+| `secret` | No | HMAC-SHA256 signing secret for payload verification |
+
+When an event fires, Anveesa sends a `POST` to the webhook URL with event details. If `secret` is set, the request includes an `X-Signature` header containing the HMAC-SHA256 hex digest of the body.
+
+---
+
+### Delete Webhook
+
+```
+DELETE /api/webhooks/{id}
+```
+
+---
+
+## Audit Log
+
+### List Audit Entries
+
+```
+GET /api/audit?limit=100&offset=0
+```
+
+Returns audit log entries, newest first.
+
+**Query Parameters**
+
+| Param | Default | Description |
+|---|---|---|
+| `limit` | 100 | Number of entries to return |
+| `offset` | 0 | Number of entries to skip |
+
+**Response**
+```json
+[
+  {
+    "id": 1,
+    "action": "upload",
+    "provider": "aws",
+    "object": "data/report.csv",
+    "details": "bucket: prod-data",
+    "ip": "192.168.1.100",
+    "created_at": "2024-06-01T10:00:00Z"
+  }
+]
+```
+
+---
+
+## Analytics
+
+### Dashboard Summary
+
+```
+GET /api/analytics
+```
+
+Returns aggregate platform statistics.
+
+**Response**
+```json
+{
+  "connections": {
+    "gcp": 2, "aws": 5, "azure": 1,
+    "alibaba": 0, "huawei": 0, "gdrive": 1
+  },
+  "activity_24h": {
+    "uploads": 42, "downloads": 128,
+    "deletes": 7, "transfers": 3
+  },
+  "jobs": {
+    "pending": 0, "running": 1,
+    "completed": 15, "failed": 2
+  },
+  "shared_links": {
+    "active": 8, "total_downloads": 342
+  }
+}
+```
+
+---
+
+## Connection Management
+
+### Export Connections
+
+```
+GET /api/connections/export
+```
+
+Downloads all connections as a JSON file (`anveesa-connections.json`). Credentials are decrypted in the export.
+
+---
+
+### Import Connections
+
+```
+POST /api/connections/import
+```
+
+Imports connections from a previously exported JSON file.
+
+**Request Body** — the JSON array from an export file.
+
+**Response** `200 OK`
+```json
+{ "imported": 5 }
+```
+
+---
+
+## Health Check
+
+```
+GET /api/health
+```
+**Public** — Returns server health status.
+
+**Response** `200 OK`
+```json
+{
+  "status": "ok",
+  "db": "ok",
+  "uptime": "2h15m30s"
+}
+```
+
+---
+
+## Documentation
+
+```
+GET /api/docs/{page}
+```
+**Public** — Returns raw markdown content for a documentation page (e.g. `/api/docs/index`).
+
+---
+
 ## Error Responses
 
 All endpoints return errors as plain text (not JSON) for 4xx/5xx responses from bucket operation handlers. Connection management endpoints return JSON errors.
@@ -405,8 +914,11 @@ All endpoints return errors as plain text (not JSON) for 4xx/5xx responses from 
 | HTTP Status | Meaning |
 |---|---|
 | `400` | Bad request — malformed body, missing fields, or credential parse error |
+| `401` | Unauthorized — missing or invalid JWT token |
+| `403` | Forbidden — registration closed, or insufficient role |
 | `404` | Connection ID not found, or no objects matched for zip |
 | `405` | Method not allowed |
+| `429` | Rate limited — too many requests from this IP |
 | `500` | Server error — provider SDK call failed |
 
 ---
@@ -425,7 +937,7 @@ Content-Type: multipart/form-data
 | `bucket` | Bucket or container name |
 | `credentials` | JSON-encoded credentials |
 | `prefix` | Folder prefix to place the file in (e.g. `images/2024/`) |
-| `file` | The file to upload (binary) |
+| `file` | The file to upload (binary, max 500 MB) |
 
 The server derives the object key as `prefix + original_filename`.
 

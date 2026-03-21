@@ -93,23 +93,25 @@ The archive filename matches the folder name (or `selection.zip` for multi-selec
 
 ## File Preview
 
-Click the **eye icon** on any file row to open the preview panel on the right side of the browser.
+Click the **eye icon** on any file row, or press `Space` on a focused row, to open the preview panel.
 
-### Supported Formats
+The preview supports **images, video, audio, PDF, Markdown, JSON, CSV/TSV, Excel, Word, code, and plain text** — with advanced features:
 
-| Format | How it is previewed |
+| Feature | Description |
 |---|---|
-| Images (jpg, png, gif, webp, svg, …) | `<img>` tag — loads directly from the signed URL |
-| PDF | `<iframe>` — rendered by the browser's built-in PDF viewer |
-| Markdown (`.md`, `.markdown`) | Rendered to HTML via `marked` |
-| Plain text, JSON, YAML, code, logs | Shown in a monospace `<pre>` block (up to 50 KB) |
-| Video (mp4, webm, mov, …) | HTML5 `<video>` player with controls |
-| Audio (mp3, wav, ogg, flac, …) | HTML5 `<audio>` player with a music-note icon |
-| Everything else | "No preview available" message |
+| **Fullscreen mode** | Expand the panel to full viewport — press `f` or click the expand icon |
+| **Image zoom** | Toolbar with +/−, Fit, 1:1 buttons. `Ctrl+Scroll` for mouse zoom (10%–500%) |
+| **Progressive loading** | Text/code files load up to 5 MB. Content renders in 500-line chunks with infinite scroll |
+| **Line numbers** | Toggle-able gutter for code, config, JSON, and text files |
+| **Word wrap** | Toggle word wrap on/off from the toolbar |
+| **Load all** | One-click button to load every remaining line at once |
+| **CSV/TSV tables** | Parsed into sortable tables with up to 2,000 rows |
+| **Excel sheets** | Multi-sheet tabs with up to 2,000 rows per sheet |
+| **Word documents** | `.docx` rendered as formatted HTML |
 
-The preview panel footer shows the file size, MIME type, and a **Download** button.
+The preview footer shows the file size, type label, and a **Download** button. Press `Escape` to exit fullscreen, then again to close the panel.
 
-Press `Escape` or click `×` to close the panel.
+For the full reference, see [File Preview](./file-preview.md).
 
 ---
 
@@ -298,12 +300,14 @@ The browser responds to the following keyboard shortcuts when focus is not in a 
 | `j` / `↓` | Move highlight to the next row |
 | `k` / `↑` | Move highlight to the previous row |
 | `Enter` | Open the highlighted folder, or preview the highlighted file |
+| `Space` | Toggle preview for the focused file |
+| `f` | Toggle fullscreen preview |
 | `d` | Download the highlighted file |
 | `Delete` | Delete the highlighted file or folder (with confirmation) |
 | `/` | Focus the search box |
 | `r` | Refresh the current folder listing |
 | `Backspace` | Navigate up one folder level |
-| `Escape` | Close preview/metadata panel → clear search → deselect rows |
+| `Escape` | Exit fullscreen → close preview → clear search → deselect rows |
 
 Row focus also tracks mouse hover, so j/k picks up from wherever the cursor is.
 
@@ -328,9 +332,102 @@ The browser header shows a colored badge indicating which provider the active co
 | Huawei OBS | Red |
 | Alibaba Cloud OSS | Orange |
 | Azure Blob Storage | Sky blue |
+| Google Drive | Blue |
 
 ---
 
 ## Sidebar Provider Filter
 
 When you have connections from more than one provider, **filter chips** appear above the connection list. Click a chip to show only connections from that provider. Multiple chips can be active simultaneously. Click a chip again to remove its filter.
+
+---
+
+## Bookmarks
+
+Bookmark any folder path for quick access from the sidebar.
+
+### Creating a Bookmark
+
+Click the **bookmark icon** (ribbon) in the browser header bar. The current connection + folder path is saved. A filled icon indicates the current location is already bookmarked; click again to remove it.
+
+### Using Bookmarks
+
+Bookmarks appear in a dedicated **Bookmarks** section in the sidebar, below the connection list. Each bookmark shows:
+
+- The deepest folder name (or bucket name for root)
+- The connection name
+
+Click any bookmark to navigate directly to that connection and folder path.
+
+Bookmarks are stored in `localStorage` and persist across sessions.
+
+---
+
+## Split View (Dual Pane)
+
+Open two connections side by side for comparing or transferring files.
+
+### Enabling Split View
+
+Click the **split icon** in the sidebar toolbar. The main area divides into two panes with a vertical divider.
+
+### Navigating Panes
+
+In split mode, sidebar clicks alternate between the left and right panes:
+
+1. First click opens a connection in the **left pane**.
+2. Next click opens a connection in the **right pane**.
+3. The cycle repeats.
+
+Each pane has its own independent browser with full functionality (search, upload, sort, preview, etc.).
+
+### Cross-Pane Drag-and-Drop
+
+Drag a file row from one pane and drop it into the other pane to **copy** the file between connections. A drop overlay appears showing "Drop to copy here". The transfer goes through the server (download + re-upload) — the file is not deleted from the source.
+
+### Disabling Split View
+
+Click the **split icon** again to return to single-pane mode. The right pane is discarded.
+
+---
+
+## Activity Panel
+
+A slide-out panel showing a chronological log of all actions performed during the current session.
+
+### Opening the Panel
+
+Click the **activity icon** (bell) in the sidebar toolbar. The panel slides in from the right edge.
+
+### Event Types
+
+The activity log tracks:
+
+| Event | Dot color |
+|---|---|
+| Upload | Teal |
+| Download | Green |
+| Delete | Red |
+| Transfer | Purple |
+| Rename | Amber |
+| Zip | Cyan |
+| Folder create | Orange |
+| Copy | Gray |
+
+Each entry shows the action description, provider, and timestamp.
+
+### Clearing
+
+Click **Clear** at the top of the panel to remove all entries. The log is in-memory only — it resets on page refresh.
+
+> For a persistent server-side audit trail, see [Audit Log](./management.md#audit-log).
+
+---
+
+## Navigation Persistence
+
+Your current view and browsing location are saved to `localStorage` automatically. When you refresh the page or reopen the browser:
+
+- If you were browsing a connection, the same connection and folder path are restored.
+- If you were on a management view (dashboard, search, audit, etc.), that view is reopened.
+- Transient states (new connection form, edit form) are not restored — you return to the welcome screen instead.

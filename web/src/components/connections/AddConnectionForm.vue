@@ -29,21 +29,22 @@
 
     <form @submit.prevent="handleSave" class="conn-form">
       <div class="form-group">
-        <label class="form-label">Name</label>
-        <BaseInput v-model="form.name" placeholder="e.g. Production Storage" />
+        <label class="form-label" for="conn-name">Name</label>
+        <BaseInput v-model="form.name" id="conn-name" placeholder="e.g. Production Storage" required />
       </div>
 
       <div class="form-group">
-        <label class="form-label">{{ provider === 'azure' ? 'Container' : provider === 'gdrive' ? 'Folder ID' : 'Bucket' }}</label>
-        <BaseInput v-model="form.bucket" :placeholder="bucketPlaceholder" />
+        <label class="form-label" for="conn-bucket">{{ provider === 'azure' ? 'Container' : provider === 'gdrive' ? 'Folder ID' : 'Bucket' }}</label>
+        <BaseInput v-model="form.bucket" id="conn-bucket" :placeholder="bucketPlaceholder" required />
       </div>
 
       <div class="form-group">
-        <label class="form-label">
+        <label class="form-label" for="conn-creds">
           {{ credentialsLabel }}
           <span class="form-label-optional" v-if="provider === 'gcp'">(optional for public buckets)</span>
         </label>
         <textarea
+          id="conn-creds"
           class="base-textarea"
           v-model="form.credentials"
           rows="6"
@@ -92,6 +93,15 @@
             </li>
           </ol>
         </div>
+        <p v-else-if="provider === 'wasabi'" class="form-hint">
+          Region examples: <code style="font-family:var(--mono);font-size:11px">us-east-1</code>, <code style="font-family:var(--mono);font-size:11px">eu-central-1</code>, <code style="font-family:var(--mono);font-size:11px">ap-northeast-1</code>. Match the endpoint to your region.
+        </p>
+        <p v-else-if="provider === 'digitalocean'" class="form-hint">
+          Replace <code style="font-family:var(--mono);font-size:11px">nyc3</code> with your region (sfo3, ams3, sgp1, etc.) in both <code style="font-family:var(--mono);font-size:11px">region</code> and <code style="font-family:var(--mono);font-size:11px">endpoint</code>.
+        </p>
+        <p v-else-if="provider === 'backblaze'" class="form-hint">
+          Use the S3-Compatible API keys from B2 Cloud Storage → App Keys. The endpoint region must match your bucket region.
+        </p>
         <p v-else class="form-hint">
           For Cloudflare R2 or MinIO, include an <code style="font-family:var(--mono);font-size:11px">"endpoint"</code> key pointing to your custom S3-compatible URL.
         </p>
@@ -104,7 +114,7 @@
         <BaseButton type="button" variant="ghost" :loading="testing" @click="handleTest">
           {{ testing ? 'Testing…' : 'Test connection' }}
         </BaseButton>
-        <BaseButton type="submit" variant="primary" :loading="saving">
+        <BaseButton type="submit" variant="primary" :loading="saving" :disabled="!formValid || saving">
           {{ saving ? 'Saving…' : (editConn ? 'Update' : 'Save') }}
         </BaseButton>
       </div>
@@ -120,12 +130,15 @@ import StatusNotice from '../ui/StatusNotice.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
 
 const PROVIDERS = [
-  { id: 'gcp',     name: 'Google Cloud Storage', sub: 'GCS' },
-  { id: 'aws',     name: 'AWS S3',                sub: 'S3 · R2 · MinIO' },
-  { id: 'gdrive',  name: 'Google Drive',          sub: 'Drive API v3' },
-  { id: 'huawei',  name: 'Huawei OBS',            sub: 'Object Storage' },
-  { id: 'alibaba', name: 'Alibaba Cloud OSS',     sub: 'Object Storage' },
-  { id: 'azure',   name: 'Azure Blob Storage',    sub: 'Blob Storage' },
+  { id: 'gcp',          name: 'Google Cloud Storage', sub: 'GCS' },
+  { id: 'aws',          name: 'AWS S3',                sub: 'S3 · R2 · MinIO' },
+  { id: 'gdrive',       name: 'Google Drive',          sub: 'Drive API v3' },
+  { id: 'huawei',       name: 'Huawei OBS',            sub: 'Object Storage' },
+  { id: 'alibaba',      name: 'Alibaba Cloud OSS',     sub: 'Object Storage' },
+  { id: 'azure',        name: 'Azure Blob Storage',    sub: 'Blob Storage' },
+  { id: 'wasabi',       name: 'Wasabi',                sub: 'S3-compatible',  backend: 'aws' },
+  { id: 'digitalocean', name: 'DigitalOcean Spaces',   sub: 'S3-compatible',  backend: 'aws' },
+  { id: 'backblaze',    name: 'Backblaze B2',          sub: 'S3-compatible',  backend: 'aws' },
 ]
 
 const props = defineProps({
@@ -155,6 +168,11 @@ watch(() => props.editConn, conn => {
   }
 })
 
+const backendProvider = computed(() => {
+  const p = PROVIDERS.find(x => x.id === provider.value)
+  return p?.backend || provider.value
+})
+
 const bucketPlaceholder = computed(() => {
   if (provider.value === 'gcp')     return 'my-bucket-name'
   if (provider.value === 'gdrive')  return '1A2B3C_folderIdFromURL'
@@ -178,23 +196,35 @@ const awsPlaceholder     = `{\n  "access_key_id": "...",\n  "secret_access_key":
 const huaweiPlaceholder  = `{\n  "access_key_id": "...",\n  "secret_access_key": "...",\n  "endpoint": "https://obs.cn-north-4.myhuaweicloud.com",\n  "region": "cn-north-4"\n}`
 const alibabaPlaceholder = `{\n  "access_key_id": "...",\n  "secret_access_key": "...",\n  "endpoint": "https://oss-cn-hangzhou.aliyuncs.com",\n  "region": "cn-hangzhou"\n}`
 const azurePlaceholder   = `{\n  "account_name": "mystorageaccount",\n  "account_key": "base64key=="\n}`
+const wasabiPlaceholder  = `{\n  "access_key_id": "...",\n  "secret_access_key": "...",\n  "region": "us-east-1",\n  "endpoint": "https://s3.wasabisys.com"\n}`
+const doPlaceholder      = `{\n  "access_key_id": "...",\n  "secret_access_key": "...",\n  "region": "nyc3",\n  "endpoint": "https://nyc3.digitaloceanspaces.com"\n}`
+const b2Placeholder      = `{\n  "access_key_id": "...",\n  "secret_access_key": "...",\n  "region": "us-west-004",\n  "endpoint": "https://s3.us-west-004.backblazeb2.com"\n}`
 
 const credentialsPlaceholder = computed(() => {
-  if (provider.value === 'gcp')     return gcpPlaceholder
-  if (provider.value === 'gdrive')  return gcpPlaceholder
-  if (provider.value === 'huawei')  return huaweiPlaceholder
-  if (provider.value === 'alibaba') return alibabaPlaceholder
-  if (provider.value === 'azure')   return azurePlaceholder
+  if (provider.value === 'gcp')          return gcpPlaceholder
+  if (provider.value === 'gdrive')       return gcpPlaceholder
+  if (provider.value === 'huawei')       return huaweiPlaceholder
+  if (provider.value === 'alibaba')      return alibabaPlaceholder
+  if (provider.value === 'azure')        return azurePlaceholder
+  if (provider.value === 'wasabi')       return wasabiPlaceholder
+  if (provider.value === 'digitalocean') return doPlaceholder
+  if (provider.value === 'backblaze')    return b2Placeholder
   return awsPlaceholder
 })
 
+const formValid = computed(() =>
+  form.value.name.trim().length > 0 &&
+  form.value.bucket.trim().length > 0 &&
+  (provider.value === 'gcp' || form.value.credentials.trim().length > 0)
+)
+
 function handleTest() {
-  emit('test', provider.value, form.value.bucket, form.value.credentials)
+  emit('test', backendProvider.value, form.value.bucket, form.value.credentials)
 }
 
 async function handleSave() {
   const success = await new Promise(resolve =>
-    emit('save', provider.value, { ...form.value }, resolve, props.editConn?.id ?? null)
+    emit('save', backendProvider.value, { ...form.value }, resolve, props.editConn?.id ?? null)
   )
   if (success && !props.editConn) {
     // Only reset form on create; keep values visible on edit

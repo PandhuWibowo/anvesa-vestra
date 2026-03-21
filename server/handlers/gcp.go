@@ -56,7 +56,7 @@ func ListGCP(w http.ResponseWriter, r *http.Request) {
 		"SELECT id, name, bucket, credentials, created_at FROM gcp_connections ORDER BY created_at DESC",
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -74,14 +74,14 @@ func ListGCP(w http.ResponseWriter, r *http.Request) {
 		var c GCPConnection
 		var created string
 		if err := rows.Scan(&c.ID, &c.Name, &c.Bucket, &c.Credentials, &created); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		c.Credentials, _ = decryptCredentials(c.Credentials)
 		c.CreatedAt, _ = time.Parse(time.RFC3339, created)
 		conns = append(conns, c)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(conns)
+	jsonOK(w, conns)
 }
 
 func CreateGCP(w http.ResponseWriter, r *http.Request) {
@@ -98,10 +98,15 @@ func CreateGCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
+	encrypted, err := encryptCredentials(req.Credentials)
+	if err != nil {
+		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := appdb.DB.Exec(
 		"INSERT INTO gcp_connections (name, bucket, credentials, created_at) VALUES (?, ?, ?, ?)",
-		req.Name, req.Bucket, req.Credentials, now,
+		req.Name, req.Bucket, encrypted, now,
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -166,9 +171,14 @@ func UpdateGCPConn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("test failed: %v", err), http.StatusBadRequest)
 		return
 	}
+	encrypted, err := encryptCredentials(req.Credentials)
+	if err != nil {
+		http.Error(w, "failed to encrypt credentials", http.StatusInternalServerError)
+		return
+	}
 	if _, err := appdb.DB.Exec(
 		"UPDATE gcp_connections SET name=?, bucket=?, credentials=? WHERE id=?",
-		req.Name, req.Bucket, req.Credentials, id,
+		req.Name, req.Bucket, encrypted, id,
 	); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

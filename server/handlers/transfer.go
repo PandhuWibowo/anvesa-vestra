@@ -15,39 +15,60 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
+	driveapi "google.golang.org/api/drive/v3"
 )
 
-// TransferRequest describes a cross-connection object transfer.
+// TransferRequest uses connection IDs instead of raw credentials.
 type TransferRequest struct {
-	SrcProvider    string `json:"src_provider"`
+	SrcProvider     string `json:"src_provider"`
+	SrcConnectionID int64  `json:"src_connection_id"`
+	SrcObject       string `json:"src_object"`
+	DstProvider     string `json:"dst_provider"`
+	DstConnectionID int64  `json:"dst_connection_id"`
+	DstPrefix       string `json:"dst_prefix"`
+	// Legacy fields (deprecated, kept for backward compat)
 	SrcBucket      string `json:"src_bucket"`
 	SrcCredentials string `json:"src_credentials"`
-	SrcObject      string `json:"src_object"`
-	DstProvider    string `json:"dst_provider"`
 	DstBucket      string `json:"dst_bucket"`
 	DstCredentials string `json:"dst_credentials"`
-	DstPrefix      string `json:"dst_prefix"`
 }
 
-// TransferObject downloads an object from the source provider and uploads it to the destination.
 func TransferObject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r = limitBody(r, MaxBodySize)
 	var req TransferRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Download from source
-	data, contentType, err := downloadObjectData(ctx, req.SrcProvider, req.SrcBucket, req.SrcCredentials, req.SrcObject)
+	// Resolve source credentials from connection ID
+	srcBucket, srcCreds, err := resolveProviderCreds(req.SrcProvider, req.SrcConnectionID, req.SrcBucket, req.SrcCredentials)
 	if err != nil {
-		http.Error(w, "download failed: "+err.Error(), http.StatusInternalServerError)
+		jsonError(w, "source connection error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Build destination key: prefix/filename
+	// Resolve destination credentials from connection ID
+	dstBucket, dstCreds, err := resolveProviderCreds(req.DstProvider, req.DstConnectionID, req.DstBucket, req.DstCredentials)
+	if err != nil {
+		jsonError(w, "destination connection error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	data, contentType, err := downloadObjectData(ctx, req.SrcProvider, srcBucket, srcCreds, req.SrcObject)
+	if err != nil {
+		jsonError(w, "download failed", http.StatusInternalServerError)
+		return
+	}
+
 	filename := path.Base(req.SrcObject)
 	prefix := strings.TrimSuffix(req.DstPrefix, "/")
 	var destKey string
@@ -57,14 +78,27 @@ func TransferObject(w http.ResponseWriter, r *http.Request) {
 		destKey = prefix + "/" + filename
 	}
 
-	// Upload to destination
-	if err := uploadObjectData(ctx, req.DstProvider, req.DstBucket, req.DstCredentials, destKey, data, contentType); err != nil {
-		http.Error(w, "upload failed: "+err.Error(), http.StatusInternalServerError)
+	if err := uploadObjectData(ctx, req.DstProvider, dstBucket, dstCreds, destKey, data, contentType); err != nil {
+		jsonError(w, "upload failed", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"destination": destKey})
+	jsonOK(w, map[string]string{"destination": destKey})
+}
+
+// resolveProviderCreds resolves bucket/credentials from either a connection ID or legacy direct credentials.
+func resolveProviderCreds(provider string, connID int64, legacyBucket, legacyCreds string) (bucket, creds string, err error) {
+	if connID > 0 {
+		table, ok := providerTable[provider]
+		if !ok {
+			return "", "", fmt.Errorf("unsupported provider: %s", provider)
+		}
+		return lookupConnection(table, connID)
+	}
+	if legacyBucket != "" && legacyCreds != "" {
+		return legacyBucket, legacyCreds, nil
+	}
+	return "", "", fmt.Errorf("connection_id or bucket+credentials required")
 }
 
 // ── Internal download helpers ─────────────────────────────────────────────────
@@ -81,6 +115,8 @@ func downloadObjectData(ctx context.Context, provider, bucket, credentials, obje
 		return downloadGCS(ctx, bucket, credentials, object)
 	case "azure":
 		return downloadAzureBlob(ctx, bucket, credentials, object)
+	case "gdrive":
+		return downloadGDriveFile(ctx, bucket, credentials, object)
 	default:
 		return nil, "", fmt.Errorf("unsupported provider: %s", provider)
 	}
@@ -174,9 +210,50 @@ func uploadObjectData(ctx context.Context, provider, bucket, credentials, destKe
 		return uploadGCS(ctx, bucket, credentials, destKey, data, contentType)
 	case "azure":
 		return uploadAzureBlob(ctx, bucket, credentials, destKey, data, contentType)
+	case "gdrive":
+		return uploadGDriveFile(ctx, bucket, credentials, destKey, data, contentType)
 	default:
 		return fmt.Errorf("unsupported provider: %s", provider)
 	}
+}
+
+// ── Google Drive transfer helpers ─────────────────────────────────────────────
+
+func downloadGDriveFile(ctx context.Context, folderID, credentials, object string) ([]byte, string, error) {
+	srv, err := gdriveService(ctx, credentials)
+	if err != nil {
+		return nil, "", err
+	}
+	fileID := extractFileID(object)
+	resp, err := srv.Files.Get(fileID).Download()
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	return data, ct, nil
+}
+
+func uploadGDriveFile(ctx context.Context, folderID, credentials, destKey string, data []byte, contentType string) error {
+	srv, err := gdriveService(ctx, credentials)
+	if err != nil {
+		return err
+	}
+	filename := path.Base(destKey)
+	driveFile := &driveapi.File{
+		Name:     filename,
+		Parents:  []string{folderID},
+		MimeType: contentType,
+	}
+	_, err = srv.Files.Create(driveFile).Media(bytes.NewReader(data)).Context(ctx).Do()
+	return err
 }
 
 func uploadS3(ctx context.Context, bucket, credentialsJSON, key string, data []byte, contentType string, clientFn func(context.Context, map[string]string) (*s3.Client, error)) error {

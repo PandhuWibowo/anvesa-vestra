@@ -145,6 +145,7 @@
             <span class="upload-item-status" :class="{ done: item.done, error: item.error }">
               {{ item.error ? '✗' : item.done ? '✓' : `${Math.round(item.progress * 100)}%` }}
             </span>
+            <button v-if="item.error && item.file" class="upload-retry-btn" @click="retryUpload(i)" title="Retry">↻</button>
           </div>
           <div class="progress-bar">
             <div class="progress-fill"
@@ -230,10 +231,31 @@
           @click="entry.type === 'dir' ? navigateTo(entry.name) : openPreview(entry)"
         >
           <div class="file-card__thumb">
-            <img v-if="isImage(entry) && entry.url" :src="entry.url" class="file-card__img" />
+            <img v-if="isImage(entry) && entry.url" :src="entry.url" class="file-card__img" :alt="entry.display || 'thumbnail'" />
             <svg v-else-if="entry.type === 'dir'" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="color:var(--aws);opacity:.8">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
+            <!-- Video -->
+            <svg v-else-if="isVideo(entry)" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)">
+              <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <!-- Audio -->
+            <svg v-else-if="isAudio(entry)" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:#e879f9">
+              <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+            </svg>
+            <!-- PDF -->
+            <svg v-else-if="isPdf(entry)" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:#ef4444">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            <!-- Code -->
+            <svg v-else-if="isCode(entry) || isConfig(entry)" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:#22d3ee">
+              <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+            </svg>
+            <!-- Archive -->
+            <svg v-else-if="isArchive(entry)" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:#f59e0b">
+              <path d="M21 8v13H3V8"/><path d="M23 3H1v5h22V3z"/><path d="M10 12h4"/>
+            </svg>
+            <!-- Default file -->
             <svg v-else width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)">
               <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
             </svg>
@@ -292,6 +314,31 @@
                 <svg v-if="entry.type === 'dir'" class="file-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="color:var(--aws)">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" opacity=".8"/>
                 </svg>
+                <!-- Image -->
+                <svg v-else-if="isImage(entry)" class="file-icon file-icon--image" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <!-- Video -->
+                <svg v-else-if="isVideo(entry)" class="file-icon file-icon--video" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                </svg>
+                <!-- Audio -->
+                <svg v-else-if="isAudio(entry)" class="file-icon file-icon--audio" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                </svg>
+                <!-- PDF -->
+                <svg v-else-if="isPdf(entry)" class="file-icon file-icon--pdf" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+                <!-- Code -->
+                <svg v-else-if="isCode(entry) || isConfig(entry)" class="file-icon file-icon--code" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                </svg>
+                <!-- Archive -->
+                <svg v-else-if="isArchive(entry)" class="file-icon file-icon--archive" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 8v13H3V8"/><path d="M23 3H1v5h22V3z"/><path d="M10 12h4"/>
+                </svg>
+                <!-- Default file -->
                 <svg v-else class="file-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
                 </svg>
@@ -403,46 +450,240 @@
         <span><kbd>Del</kbd> delete</span>
         <span><kbd>/</kbd> search</span>
         <span><kbd>r</kbd> refresh</span>
+        <span><kbd>f</kbd> fullscreen</span>
         <span><kbd>⌫</kbd> up</span>
       </div>
     </div>
 
     <!-- ── Preview panel ────────────────────────────────────────── -->
     <transition name="slide-right">
-      <div v-if="previewEntry && !metaEntry" class="preview-panel">
+      <div v-if="previewEntry && !metaEntry" class="preview-panel" :class="{ 'preview-panel--fullscreen': previewFullscreen }">
         <div class="preview-hd">
           <span class="preview-hd__name">{{ previewEntry.display }}</span>
-          <button class="preview-close" @click="closePreview">×</button>
+          <div style="display:flex;align-items:center;gap:4px">
+            <button class="preview-hd-btn" @click="togglePreviewFullscreen" :title="previewFullscreen ? 'Exit fullscreen (f)' : 'Fullscreen (f)'">
+              <svg v-if="!previewFullscreen" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+              <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+            <button class="preview-close" @click="closePreview">×</button>
+          </div>
         </div>
-        <div class="preview-body">
+
+        <!-- Preview toolbar -->
+        <div class="preview-toolbar" v-if="!previewLoading">
+          <!-- Image controls -->
+          <template v-if="isImage(previewEntry) && previewUrl && !previewLoadError">
+            <button class="preview-tb-btn" @click="previewDoZoomOut" title="Zoom out">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <span class="preview-tb-zoom">{{ previewZoomIsFit ? 'Fit' : Math.round(previewZoom * 100) + '%' }}</span>
+            <button class="preview-tb-btn" @click="previewDoZoomIn" title="Zoom in">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <div class="preview-tb-sep"></div>
+            <button class="preview-tb-btn" :class="{ active: previewZoomIsFit }" @click="previewDoZoomFit" title="Fit to panel">Fit</button>
+            <button class="preview-tb-btn" @click="previewDoZoomReset" title="Actual size (1:1)">1:1</button>
+          </template>
+
+          <!-- Text/Code controls -->
+          <template v-if="(isCode(previewEntry) || isConfig(previewEntry) || isPlainText(previewEntry) || isJson(previewEntry)) && previewContent">
+            <button class="preview-tb-btn" :class="{ active: previewShowLineNumbers }" @click="previewShowLineNumbers = !previewShowLineNumbers" title="Line numbers">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="6" x2="4.01" y2="6"/><line x1="4" y1="12" x2="4.01" y2="12"/><line x1="4" y1="18" x2="4.01" y2="18"/>
+                <line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
+            <button class="preview-tb-btn" :class="{ active: previewWordWrap }" @click="previewWordWrap = !previewWordWrap" title="Word wrap">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><path d="M3 18h7"/>
+              </svg>
+            </button>
+            <span class="preview-tb-info" v-if="previewTextAllLines.length">{{ previewLineProgress }}</span>
+            <div class="preview-tb-spacer"></div>
+            <button v-if="previewHasMoreLines" class="preview-tb-btn preview-tb-btn--accent" @click="loadAllPreviewLines" title="Load all remaining lines">Load all</button>
+          </template>
+        </div>
+
+        <div class="preview-body" ref="previewBodyRef">
           <div v-if="previewLoading" class="preview-unsupported">
             <div class="base-btn__spinner" style="width:20px;height:20px;border-width:2px"></div>
           </div>
-          <img v-else-if="isImage(previewEntry) && previewUrl" :src="previewUrl" class="preview-img" @error="previewLoadError=true" />
+
+          <!-- Image -->
+          <div v-else-if="isImage(previewEntry) && previewUrl" class="preview-img-wrap" @wheel="onPreviewImageWheel">
+            <img :src="previewUrl"
+                 class="preview-img"
+                 :class="{ 'preview-img--fit': previewZoomIsFit }"
+                 :style="!previewZoomIsFit ? `transform:scale(${previewZoom});transform-origin:top left` : ''"
+                 alt="File preview"
+                 @error="previewLoadError=true" />
+          </div>
+
+          <!-- Video -->
           <video v-else-if="isVideo(previewEntry) && previewUrl"
                  :src="previewUrl" class="preview-video" controls controlslist="nodownload" />
+
+          <!-- Audio -->
           <div v-else-if="isAudio(previewEntry) && previewUrl" class="preview-audio-wrap">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted);opacity:.5">
               <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
             </svg>
             <audio :src="previewUrl" class="preview-audio" controls />
           </div>
+
+          <!-- PDF -->
           <iframe v-else-if="isPdf(previewEntry) && previewUrl"
                   :src="previewUrl" class="preview-pdf" title="PDF preview" />
+
+          <!-- Markdown (rendered) -->
           <div v-else-if="isMarkdown(previewEntry) && previewHtml"
                class="preview-markdown" v-html="previewHtml" />
-          <pre v-else-if="isText(previewEntry) && previewContent" class="preview-text">{{ previewContent }}</pre>
+
+          <!-- JSON (formatted) -->
+          <div v-else-if="isJson(previewEntry) && previewJsonFormatted" class="preview-code-wrap">
+            <div class="preview-code-lang">JSON</div>
+            <div class="preview-code-body" :class="{ 'preview-code-body--nowrap': !previewWordWrap }" @scroll="onPreviewCodeScroll">
+              <pre v-if="previewShowLineNumbers && previewTextAllLines.length" class="preview-line-gutter" aria-hidden="true">{{ previewLineNumbersText }}</pre>
+              <pre class="preview-text preview-text--code">{{ previewVisibleText || previewJsonFormatted }}</pre>
+            </div>
+            <div v-if="previewHasMoreLines" class="preview-load-more-bar">
+              <button class="preview-load-more-btn" @click="loadMorePreviewLines">
+                Load {{ Math.min(PREVIEW_LINE_CHUNK, previewTextAllLines.length - previewVisibleLineCount).toLocaleString() }} more lines
+              </button>
+              <span class="preview-load-more-info">{{ previewLineProgress }}</span>
+            </div>
+          </div>
+
+          <!-- CSV / TSV (table) -->
+          <div v-else-if="isCsv(previewEntry) && previewCsvRows.length" class="preview-csv-wrap">
+            <div class="preview-code-lang">{{ previewLang }}</div>
+            <div class="preview-csv-scroll">
+              <table class="preview-csv-table">
+                <thead v-if="previewCsvRows.length > 1">
+                  <tr>
+                    <th v-for="(cell, ci) in previewCsvRows[0]" :key="ci">{{ cell }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, ri) in previewCsvRows.slice(1)" :key="ri">
+                    <td v-for="(cell, ci) in row" :key="ci">{{ cell }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="previewCsvRows.length >= 2000" class="preview-truncated">Showing first 2,000 rows</div>
+          </div>
+
+          <!-- Code / Config / Plain text (with language label) -->
+          <div v-else-if="isTextPreviewable(previewEntry) && previewContent" class="preview-code-wrap">
+            <div class="preview-code-lang">{{ previewLang }}</div>
+            <div class="preview-code-body" :class="{ 'preview-code-body--nowrap': !previewWordWrap }" @scroll="onPreviewCodeScroll">
+              <pre v-if="previewShowLineNumbers && previewTextAllLines.length" class="preview-line-gutter" aria-hidden="true">{{ previewLineNumbersText }}</pre>
+              <pre class="preview-text preview-text--code">{{ previewTextAllLines.length ? previewVisibleText : previewContent }}</pre>
+            </div>
+            <div v-if="previewHasMoreLines" class="preview-load-more-bar">
+              <button class="preview-load-more-btn" @click="loadMorePreviewLines">
+                Load {{ Math.min(PREVIEW_LINE_CHUNK, previewTextAllLines.length - previewVisibleLineCount).toLocaleString() }} more lines
+              </button>
+              <span class="preview-load-more-info">{{ previewLineProgress }}</span>
+            </div>
+          </div>
+
+          <!-- Excel / Spreadsheet -->
+          <div v-else-if="isExcel(previewEntry) && previewExcelSheets.length" class="preview-excel-wrap">
+            <div class="preview-excel-tabs" v-if="previewExcelSheets.length > 1">
+              <button
+                v-for="(sheet, si) in previewExcelSheets" :key="si"
+                class="preview-excel-tab"
+                :class="{ active: previewExcelActive === si }"
+                @click="previewExcelActive = si"
+              >{{ sheet.name }}</button>
+            </div>
+            <div class="preview-excel-tab-label" v-else>
+              {{ previewExcelSheets[0]?.name }}
+            </div>
+            <div class="preview-csv-scroll">
+              <table class="preview-csv-table">
+                <thead>
+                  <tr>
+                    <th class="preview-csv-rownum">#</th>
+                    <th v-for="(h, hi) in previewExcelSheets[previewExcelActive]?.headers" :key="hi">{{ h }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, ri) in previewExcelSheets[previewExcelActive]?.rows" :key="ri">
+                    <td class="preview-csv-rownum">{{ ri + 1 }}</td>
+                    <td v-for="(cell, ci) in row" :key="ci">{{ cell }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="(previewExcelSheets[previewExcelActive]?.totalRows ?? 0) > 2000" class="preview-truncated">
+              Showing first 2,000 of {{ previewExcelSheets[previewExcelActive].totalRows.toLocaleString() }} rows
+            </div>
+          </div>
+
+          <!-- Word / docx -->
+          <div v-else-if="isWord(previewEntry) && previewWordHtml" class="preview-word-wrap">
+            <div class="preview-code-lang">{{ previewLang }}</div>
+            <div class="preview-word-body" v-html="previewWordHtml" />
+          </div>
+
+          <!-- PowerPoint (download prompt) -->
+          <div v-else-if="isPowerPoint(previewEntry)" class="preview-unsupported">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            <p>Presentation — {{ languageLabel(previewEntry) }}</p>
+            <p style="font-size:11px;color:var(--muted)">Download to open in your presentation app.</p>
+          </div>
+
+          <!-- Font files -->
+          <div v-else-if="isFont(previewEntry)" class="preview-unsupported">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4">
+              <polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/>
+            </svg>
+            <p>Font file — {{ previewLang || languageLabel(previewEntry) }}</p>
+            <p style="font-size:11px;color:var(--muted)">Download to install or preview in a font viewer.</p>
+          </div>
+
+          <!-- Archive -->
+          <div v-else-if="isArchive(previewEntry)" class="preview-unsupported">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4">
+              <path d="M21 8v13H3V8"/><path d="M23 3H1v5h22V3z"/><path d="M10 12h4"/>
+            </svg>
+            <p>Archive — {{ languageLabel(previewEntry) }}</p>
+            <p style="font-size:11px;color:var(--muted)">Download to extract contents.</p>
+          </div>
+
+          <!-- Other Office documents (epub, etc.) -->
+          <div v-else-if="isOffice(previewEntry)" class="preview-unsupported">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <p>Document — {{ languageLabel(previewEntry) }}</p>
+            <p style="font-size:11px;color:var(--muted)">Download to open in your office application.</p>
+          </div>
+
+          <!-- Unsupported / fallback -->
           <div v-else class="preview-unsupported">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.3">
               <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
             </svg>
-            <p>{{ previewLoadError ? 'Failed to load preview.' : 'No preview for this file type.' }}</p>
+            <p>{{ previewLoadError ? 'Failed to load preview.' : `No preview available for .${getExt(previewEntry) || 'this'} files.` }}</p>
+            <p v-if="!previewLoadError" style="font-size:11px;color:var(--muted)">Download to view this file.</p>
           </div>
         </div>
         <div class="preview-ft">
           <span class="preview-meta">
             {{ formatSize(previewEntry.size) }}
-            <template v-if="previewEntry.content_type"> · {{ previewEntry.content_type }}</template>
+            <template v-if="previewLang"> · {{ previewLang }}</template>
+            <template v-else-if="previewEntry.content_type"> · {{ previewEntry.content_type }}</template>
           </span>
           <button class="base-btn base-btn--ghost" @click="download(previewEntry)" style="font-size:12px;padding:5px 10px">Download</button>
         </div>
@@ -631,6 +872,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import BaseBadge    from '../ui/BaseBadge.vue'
 import BaseModal    from '../ui/BaseModal.vue'
 import ProviderIcon from '../ui/ProviderIcon.vue'
@@ -640,6 +882,15 @@ import { useConfirm }       from '../../composables/useConfirm.js'
 import { useBookmarks }     from '../../composables/useBookmarks.js'
 import { useActivity }      from '../../composables/useActivity.js'
 import { useDragState }     from '../../composables/useDragState.js'
+import {
+  isImage, isVideo, isAudio, isPdf, isMarkdown,
+  isJson, isCsv, isSvg, isCode, isConfig, isPlainText,
+  isTextPreviewable, isArchive, isOffice, isFont,
+  isExcel, isWord, isPowerPoint,
+  fileCategory, languageLabel,
+} from '../../utils/fileTypes.js'
+import * as XLSX from 'xlsx'
+import mammoth from 'mammoth'
 
 const props = defineProps({
   conn:        { type: Object, required: true },
@@ -649,7 +900,7 @@ const props = defineProps({
 })
 defineEmits(['delete'])
 
-const { browseObjects, getDownloadURL, presignUrl, zipDownload, deleteObject, copyObject, uploadObjects, uploadObjectWithProgress, deletePrefix, transferObject, getBucketStats, getObjectMetadata, updateObjectMetadata } = useConnections()
+const { browseObjects, getDownloadURL, proxyDownload, presignUrl, zipDownload, deleteObject, copyObject, uploadObjects, uploadObjectWithProgress, deletePrefix, transferObject, getBucketStats, getObjectMetadata, updateObjectMetadata } = useConnections()
 const toast   = useToast()
 const confirm = useConfirm()
 const { isBookmarked, toggleBookmark }            = useBookmarks()
@@ -665,8 +916,8 @@ const loadingMore    = ref(false)
 const browseError    = ref('')
 
 const searchQuery    = ref('')
-const sortKey        = ref('name')
-const sortDir        = ref('asc')
+const sortKey        = ref(localStorage.getItem('anveesa-sort-key') ?? 'name')
+const sortDir        = ref(localStorage.getItem('anveesa-sort-dir') ?? 'asc')
 
 // ── Stats ───────────────────────────────────────────────────────
 const stats        = ref(null)
@@ -708,6 +959,17 @@ const previewContent  = ref('')
 const previewHtml     = ref('')
 const previewLoading  = ref(false)
 const previewLoadError = ref(false)
+
+const previewFullscreen = ref(false)
+const previewZoom = ref(1)
+const previewZoomIsFit = ref(true)
+const previewWordWrap = ref(true)
+const previewShowLineNumbers = ref(true)
+const previewVisibleLineCount = ref(500)
+const PREVIEW_LINE_CHUNK = 500
+const PREVIEW_MAX_BYTES = 5_000_000
+const previewTextAllLines = ref([])
+const previewBodyRef = ref(null)
 
 // ── Transfer modal ───────────────────────────────────────────────
 const showTransferModal = ref(false)
@@ -906,6 +1168,8 @@ function toggleStats() {
 function cycleSort(key) {
   if (sortKey.value === key) sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
   else { sortKey.value = key; sortDir.value = 'asc' }
+  localStorage.setItem('anveesa-sort-key', sortKey.value)
+  localStorage.setItem('anveesa-sort-dir', sortDir.value)
 }
 
 // ── Bulk operations ─────────────────────────────────────────────
@@ -1148,7 +1412,7 @@ async function doTransfer() {
 async function handleUpload(files) {
   if (!files?.length) return
   const fileArr = Array.from(files)
-  uploadQueue.value = fileArr.map(f => ({ name: f.name, progress: 0, done: false, error: false }))
+  uploadQueue.value = fileArr.map(f => ({ name: f.name, file: f, progress: 0, done: false, error: false }))
   let anyError = false
   for (let i = 0; i < fileArr.length; i++) {
     try {
@@ -1165,7 +1429,8 @@ async function handleUpload(files) {
     }
   }
   const done = uploadQueue.value.filter(u => u.done).length
-  setTimeout(() => { uploadQueue.value = [] }, 1500)
+  const hasErrors = uploadQueue.value.some(u => u.error)
+  if (!hasErrors) setTimeout(() => { uploadQueue.value = [] }, 1500)
   if (done > 0) {
     toast.success(`${done} file${done !== 1 ? 's' : ''} uploaded.`)
     activityLog('upload', `Uploaded ${done} file${done !== 1 ? 's' : ''}`, props.conn.provider)
@@ -1176,6 +1441,28 @@ async function handleUpload(files) {
 }
 
 function onFileInput(e) { handleUpload(e.target.files); e.target.value = '' }
+
+async function retryUpload(index) {
+  const item = uploadQueue.value[index]
+  if (!item?.file) return
+  item.error = false
+  item.progress = 0
+  item.done = false
+  try {
+    await uploadObjectWithProgress(
+      props.conn.provider, props.conn.bucket, props.conn.credentials,
+      currentPrefix.value, item.file,
+      p => { uploadQueue.value[index].progress = p }
+    )
+    item.done = true
+    item.progress = 1
+    toast.success(`${item.name} uploaded.`)
+    await load()
+  } catch {
+    item.error = true
+    toast.error(`${item.name} failed again.`)
+  }
+}
 
 // ── Folder upload ────────────────────────────────────────────────
 async function handleFolderUpload(files) {
@@ -1320,69 +1607,211 @@ async function doRename() {
 }
 
 // ── Preview ─────────────────────────────────────────────────────
-function isImage(entry) {
-  const ct  = (entry?.content_type || '').toLowerCase()
-  const ext = entry?.display.split('.').pop().toLowerCase()
-  return ct.startsWith('image/') || ['jpg','jpeg','png','gif','webp','svg','ico','bmp'].includes(ext)
-}
-function isText(entry) {
-  const ct  = (entry?.content_type || '').toLowerCase()
-  const ext = entry?.display.split('.').pop().toLowerCase()
-  return ct.startsWith('text/') || ct.includes('json') || ct.includes('xml') || ct.includes('javascript')
-    || ['txt','md','json','yaml','yml','toml','csv','xml','html','js','ts','py','sh','log','conf','ini'].includes(ext)
-}
-function isPdf(entry) {
-  const ct  = (entry?.content_type || '').toLowerCase()
-  const ext = entry?.display.split('.').pop().toLowerCase()
-  return ct === 'application/pdf' || ext === 'pdf'
-}
-function isMarkdown(entry) {
-  const ext = entry?.display.split('.').pop().toLowerCase()
-  return ['md', 'markdown'].includes(ext)
-}
-function isVideo(entry) {
-  const ct  = (entry?.content_type || '').toLowerCase()
-  const ext = entry?.display.split('.').pop().toLowerCase()
-  return ct.startsWith('video/') || ['mp4','webm','mov','avi','mkv','ogv'].includes(ext)
-}
-function isAudio(entry) {
-  const ct  = (entry?.content_type || '').toLowerCase()
-  const ext = entry?.display.split('.').pop().toLowerCase()
-  return ct.startsWith('audio/') || ['mp3','wav','ogg','flac','aac','m4a','opus'].includes(ext)
-}
+const previewJsonFormatted = ref('')
+const previewCsvRows       = ref([])
+const previewLang          = ref('')
+const previewExcelSheets   = ref([])       // [{ name, headers, rows }]
+const previewExcelActive   = ref(0)        // active sheet tab index
+const previewWordHtml      = ref('')       // rendered Word docx HTML
+
+const previewVisibleText = computed(() => {
+  if (!previewTextAllLines.value.length) return previewContent.value
+  return previewTextAllLines.value.slice(0, previewVisibleLineCount.value).join('\n')
+})
+
+const previewHasMoreLines = computed(() =>
+  previewTextAllLines.value.length > previewVisibleLineCount.value
+)
+
+const previewLineProgress = computed(() => {
+  if (!previewTextAllLines.value.length) return ''
+  const shown = Math.min(previewVisibleLineCount.value, previewTextAllLines.value.length)
+  return `${shown.toLocaleString()} / ${previewTextAllLines.value.length.toLocaleString()} lines`
+})
+
+const previewLineNumbersText = computed(() => {
+  const count = Math.min(previewVisibleLineCount.value, previewTextAllLines.value.length)
+  if (count === 0) return ''
+  const arr = []
+  for (let i = 1; i <= count; i++) arr.push(i)
+  return arr.join('\n')
+})
 
 async function openPreview(entry) {
-  metaEntry.value        = null
-  previewEntry.value     = entry
-  previewUrl.value       = ''
-  previewContent.value   = ''
-  previewHtml.value      = ''
-  previewLoadError.value = false
-  previewLoading.value   = true
+  metaEntry.value            = null
+  previewEntry.value         = entry
+  previewUrl.value           = ''
+  previewContent.value       = ''
+  previewHtml.value          = ''
+  previewJsonFormatted.value = ''
+  previewCsvRows.value       = []
+  previewLang.value          = ''
+  previewExcelSheets.value   = []
+  previewExcelActive.value   = 0
+  previewWordHtml.value           = ''
+  previewLoadError.value          = false
+  previewTextAllLines.value       = []
+  previewVisibleLineCount.value   = PREVIEW_LINE_CHUNK
+  previewZoom.value               = 1
+  previewZoomIsFit.value          = true
+  previewLoading.value            = true
   try {
-    const url = await getDownloadURL(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
-    previewUrl.value = url
-    if (isText(entry)) {
-      const res = await fetch(url)
-      if (res.ok) {
-        const text = (await res.text()).slice(0, 50_000)
-        previewContent.value = text
-        if (isMarkdown(entry)) {
-          previewHtml.value = marked.parse(text)
+    // For media types (img/video/audio/pdf), we use presigned URLs since
+    // HTML media elements aren't subject to CORS.
+    // For everything else, we proxy through the backend to avoid CORS.
+    const needsProxy = isExcel(entry) || isWord(entry) || isTextPreviewable(entry)
+
+    if (!needsProxy) {
+      const url = await getDownloadURL(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+      previewUrl.value = url
+    }
+
+    if (isExcel(entry)) {
+      await loadExcelPreview(entry)
+    } else if (isWord(entry)) {
+      await loadWordPreview(entry)
+    } else if (isTextPreviewable(entry)) {
+      const res = await proxyDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+      const text = (await res.text()).slice(0, PREVIEW_MAX_BYTES)
+      previewContent.value = text
+      previewLang.value = languageLabel(entry)
+
+      if (isMarkdown(entry)) {
+        previewHtml.value = DOMPurify.sanitize(marked.parse(text))
+      } else if (isJson(entry)) {
+        try {
+          const formatted = JSON.stringify(JSON.parse(text), null, 2)
+          previewJsonFormatted.value = formatted
+          previewTextAllLines.value = formatted.split('\n')
+        } catch {
+          previewJsonFormatted.value = text
+          previewTextAllLines.value = text.split('\n')
         }
+        previewVisibleLineCount.value = PREVIEW_LINE_CHUNK
+      } else if (isCsv(entry)) {
+        parseCsvPreview(text, entry)
       } else {
-        previewLoadError.value = true
+        previewTextAllLines.value = text.split('\n')
+        previewVisibleLineCount.value = PREVIEW_LINE_CHUNK
       }
     }
   } catch { previewLoadError.value = true }
   finally { previewLoading.value = false }
 }
 
+async function loadExcelPreview(entry) {
+  const res = await proxyDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+  const buf = await res.arrayBuffer()
+  const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+  previewExcelSheets.value = wb.SheetNames.map(name => {
+    const sheet = wb.Sheets[name]
+    const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+    const headers = json[0] || []
+    const rows = json.slice(1, 2001)
+    return { name, headers, rows, totalRows: json.length - 1 }
+  })
+  previewLang.value = languageLabel(previewEntry.value)
+}
+
+async function loadWordPreview(entry) {
+  const res = await proxyDownload(props.conn.provider, props.conn.bucket, props.conn.credentials, entry.name)
+  const buf = await res.arrayBuffer()
+  const result = await mammoth.convertToHtml({ arrayBuffer: buf })
+  previewWordHtml.value = DOMPurify.sanitize(result.value)
+  previewLang.value = languageLabel(previewEntry.value)
+}
+
+function parseCsvPreview(text, entry) {
+  const sep = getExt(entry) === 'tsv' ? '\t' : ','
+  const lines = text.split('\n').filter(l => l.trim()).slice(0, 2000)
+  previewCsvRows.value = lines.map(line => {
+    const cells = []
+    let current = '', inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') { inQuotes = !inQuotes; continue }
+      if (ch === sep && !inQuotes) { cells.push(current.trim()); current = ''; continue }
+      current += ch
+    }
+    cells.push(current.trim())
+    return cells
+  })
+}
+
+function getExt(entry) {
+  const name = entry?.display || entry?.name || ''
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
 function closePreview() {
-  previewEntry.value   = null
-  previewUrl.value     = ''
-  previewContent.value = ''
-  previewHtml.value    = ''
+  previewEntry.value              = null
+  previewUrl.value                = ''
+  previewContent.value            = ''
+  previewHtml.value               = ''
+  previewJsonFormatted.value      = ''
+  previewCsvRows.value            = []
+  previewLang.value               = ''
+  previewExcelSheets.value        = []
+  previewExcelActive.value        = 0
+  previewWordHtml.value           = ''
+  previewFullscreen.value         = false
+  previewZoom.value               = 1
+  previewZoomIsFit.value          = true
+  previewTextAllLines.value       = []
+  previewVisibleLineCount.value   = PREVIEW_LINE_CHUNK
+}
+
+function togglePreviewFullscreen() {
+  previewFullscreen.value = !previewFullscreen.value
+}
+
+function loadMorePreviewLines() {
+  if (previewVisibleLineCount.value < previewTextAllLines.value.length) {
+    previewVisibleLineCount.value = Math.min(
+      previewVisibleLineCount.value + PREVIEW_LINE_CHUNK,
+      previewTextAllLines.value.length
+    )
+  }
+}
+
+function loadAllPreviewLines() {
+  previewVisibleLineCount.value = previewTextAllLines.value.length
+}
+
+function onPreviewCodeScroll(e) {
+  const el = e.target
+  if (previewTextAllLines.value.length && el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
+    loadMorePreviewLines()
+  }
+}
+
+function previewDoZoomIn() {
+  previewZoomIsFit.value = false
+  previewZoom.value = Math.min(+(previewZoom.value + 0.25).toFixed(2), 5)
+}
+
+function previewDoZoomOut() {
+  previewZoomIsFit.value = false
+  previewZoom.value = Math.max(+(previewZoom.value - 0.25).toFixed(2), 0.1)
+}
+
+function previewDoZoomReset() {
+  previewZoomIsFit.value = false
+  previewZoom.value = 1
+}
+
+function previewDoZoomFit() {
+  previewZoomIsFit.value = true
+  previewZoom.value = 1
+}
+
+function onPreviewImageWheel(e) {
+  if (!e.ctrlKey && !e.metaKey) return
+  e.preventDefault()
+  previewZoomIsFit.value = false
+  const delta = e.deltaY > 0 ? -0.1 : 0.1
+  previewZoom.value = Math.max(0.1, Math.min(5, +(previewZoom.value + delta).toFixed(2)))
 }
 
 // ── Metadata editor ─────────────────────────────────────────────
@@ -1444,8 +1873,15 @@ function onKeyDown(e) {
   // Refresh
   if ((e.key === 'r' || e.key === 'R') && !inInput && !e.metaKey && !e.ctrlKey) { refresh(); return }
 
+  // f — toggle preview fullscreen
+  if ((e.key === 'f' || e.key === 'F') && !inInput && !e.metaKey && !e.ctrlKey && previewEntry.value) {
+    togglePreviewFullscreen()
+    return
+  }
+
   // Close / collapse
   if (e.key === 'Escape') {
+    if (previewFullscreen.value) { previewFullscreen.value = false; return }
     if (metaEntry.value)    { metaEntry.value = null; return }
     if (previewEntry.value) { closePreview(); return }
     if (searchQuery.value)  { searchQuery.value = ''; return }
