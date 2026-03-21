@@ -61,19 +61,36 @@
         <p v-else-if="provider === 'azure'" class="form-hint">
           "Container" is the Azure Blob container name. The <code style="font-family:var(--mono);font-size:11px">"account_key"</code> is the base64 key from the Azure portal → Storage account → Access keys.
         </p>
-        <div v-else-if="provider === 'gdrive'" class="form-hint">
-          <p>
-            <strong>⚠ Requires Google Workspace.</strong>
-            Google Drive connections use a <strong>Shared Drive</strong> (Team Drive) as the root.
-            Personal "My Drive" folders are not supported — uploads will fail with a quota error.
-          </p>
-          <p style="margin-top:6px">
-            <strong>Folder ID</strong> — open the Shared Drive folder in your browser and copy the ID from the URL:
-            <code style="font-family:var(--mono);font-size:11px">drive.google.com/drive/folders/<strong>THIS_PART</strong></code>
-          </p>
-          <p style="margin-top:6px">
-            Make sure the service account email (from the JSON) has been added as a <strong>Contributor</strong> or <strong>Content manager</strong> on the Shared Drive.
-          </p>
+        <div v-else-if="provider === 'gdrive'" class="gdrive-guide">
+          <div class="gdrive-guide__warning">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span><strong>Google Workspace required.</strong> Shared Drives are not available on personal Google accounts. Uploading to a personal "My Drive" folder will fail.</span>
+          </div>
+
+          <p class="gdrive-guide__label">Setup steps</p>
+          <ol class="gdrive-guide__steps">
+            <li>
+              <span class="gdrive-guide__step-title">Enable Google Drive API</span>
+              <span class="gdrive-guide__step-desc">Google Cloud Console → APIs &amp; Services → Library → search <em>Google Drive API</em> → Enable.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Create a Service Account &amp; download JSON key</span>
+              <span class="gdrive-guide__step-desc">IAM &amp; Admin → Service Accounts → Create → Keys → Add Key → JSON.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Create a Shared Drive</span>
+              <span class="gdrive-guide__step-desc">In Google Drive, click <em>Shared drives</em> in the sidebar → <em>New</em>.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Add service account as member</span>
+              <span class="gdrive-guide__step-desc">Right-click the Shared Drive → <em>Manage members</em> → add the <code>client_email</code> from the JSON with role <strong>Contributor</strong> or <strong>Content manager</strong>.</span>
+            </li>
+            <li>
+              <span class="gdrive-guide__step-title">Copy the Folder ID</span>
+              <span class="gdrive-guide__step-desc">Open the Shared Drive or subfolder — the Folder ID is the last segment of the URL:</span>
+              <span class="gdrive-guide__url">drive.google.com/drive/folders/<strong>1AbCdEfGhIjKlMnOpQr</strong></span>
+            </li>
+          </ol>
         </div>
         <p v-else class="form-hint">
           For Cloudflare R2 or MinIO, include an <code style="font-family:var(--mono);font-size:11px">"endpoint"</code> key pointing to your custom S3-compatible URL.

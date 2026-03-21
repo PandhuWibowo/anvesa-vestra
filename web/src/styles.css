@@ -549,6 +549,120 @@ body {
 
 .conn-form { display: flex; flex-direction: column; gap: 14px; }
 
+/* ── Google Drive setup guide ─────────────────────────────────── */
+.gdrive-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.gdrive-guide__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: rgba(234, 179, 8, .08);
+  border: 1px solid rgba(234, 179, 8, .3);
+  color: #92740a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.dark .gdrive-guide__warning {
+  background: rgba(234, 179, 8, .07);
+  border-color: rgba(234, 179, 8, .2);
+  color: #c9a227;
+}
+.gdrive-guide__warning svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.gdrive-guide__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+  margin: 0;
+}
+
+.gdrive-guide__steps {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  counter-reset: gdrive-step;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.gdrive-guide__steps li {
+  counter-increment: gdrive-step;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px 9px 38px;
+  position: relative;
+  border-bottom: 1px solid var(--border);
+}
+.gdrive-guide__steps li:last-child { border-bottom: none; }
+
+.gdrive-guide__steps li::before {
+  content: counter(gdrive-step);
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--gdrive-bg);
+  color: var(--gdrive);
+  font-size: 9.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gdrive-guide__step-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.gdrive-guide__step-desc {
+  color: var(--text-2);
+  font-size: 11px;
+}
+.gdrive-guide__step-desc code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.gdrive-guide__url {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 7px;
+  word-break: break-all;
+}
+.gdrive-guide__url strong { color: var(--gdrive); }
+
 .form-actions {
   display: flex;
   gap: 8px;
