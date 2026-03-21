@@ -61,9 +61,20 @@
         <p v-else-if="provider === 'azure'" class="form-hint">
           "Container" is the Azure Blob container name. The <code style="font-family:var(--mono);font-size:11px">"account_key"</code> is the base64 key from the Azure portal → Storage account → Access keys.
         </p>
-        <p v-else-if="provider === 'gdrive'" class="form-hint">
-          Enter the Google Drive <strong>Folder ID</strong> from the URL (e.g. <code style="font-family:var(--mono);font-size:11px">1A2B3C...</code>). Share the folder with the service account email.
-        </p>
+        <div v-else-if="provider === 'gdrive'" class="form-hint">
+          <p>
+            <strong>⚠ Requires Google Workspace.</strong>
+            Google Drive connections use a <strong>Shared Drive</strong> (Team Drive) as the root.
+            Personal "My Drive" folders are not supported — uploads will fail with a quota error.
+          </p>
+          <p style="margin-top:6px">
+            <strong>Folder ID</strong> — open the Shared Drive folder in your browser and copy the ID from the URL:
+            <code style="font-family:var(--mono);font-size:11px">drive.google.com/drive/folders/<strong>THIS_PART</strong></code>
+          </p>
+          <p style="margin-top:6px">
+            Make sure the service account email (from the JSON) has been added as a <strong>Contributor</strong> or <strong>Content manager</strong> on the Shared Drive.
+          </p>
+        </div>
         <p v-else class="form-hint">
           For Cloudflare R2 or MinIO, include an <code style="font-family:var(--mono);font-size:11px">"endpoint"</code> key pointing to your custom S3-compatible URL.
         </p>
