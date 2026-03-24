@@ -16,4 +16,4 @@ server/data.db-journal
 */*.db-wal
 */*.db-journal
 bin/
-_prompts/
+_prompts/.DS_Store

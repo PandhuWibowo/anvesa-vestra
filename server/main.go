@@ -62,6 +62,13 @@ func main() {
 	mux.HandleFunc("/api/auth/me", protect(handlers.MeHandler))
 	mux.HandleFunc("/api/auth/setup-status", public(handlers.SetupStatusHandler(cfg.AuthEnabled)))
 
+	// ── 2FA / TOTP ───────────────────────────────────────────────
+	mux.HandleFunc("/api/auth/2fa/setup", protect(handlers.TOTPSetupHandler))
+	mux.HandleFunc("/api/auth/2fa/verify", protect(handlers.TOTPVerifyHandler))
+	mux.HandleFunc("/api/auth/2fa/disable", protect(handlers.TOTPDisableHandler))
+	mux.HandleFunc("/api/auth/2fa/status", protect(handlers.TOTPStatusHandler))
+	mux.HandleFunc("/api/auth/2fa/challenge", cors(loginRate(handlers.TOTPChallengeHandler(cfg.JWTSecret, cfg.JWTExpiry))))
+
 	// ── GCP ──────────────────────────────────────────────────────
 	mux.HandleFunc("/api/gcp/connections", protect(handlers.ListGCP))
 	mux.HandleFunc("/api/gcp/connection", protect(handlers.CreateGCP))
@@ -77,6 +84,13 @@ func main() {
 	mux.HandleFunc("/api/gcp/bucket/metadata", protect(handlers.GetGCPMetadata))
 	mux.HandleFunc("/api/gcp/bucket/metadata/update", protect(handlers.UpdateGCPMetadata))
 	mux.HandleFunc("/api/gcp/bucket/delete-prefix", protect(handlers.DeletePrefixGCP))
+	mux.HandleFunc("/api/gcp/bucket/presign-upload", protect(handlers.PresignGCPUpload))
+	mux.HandleFunc("/api/gcp/bucket/versions", protect(handlers.ListGCPVersions))
+	mux.HandleFunc("/api/gcp/bucket/version/restore", protect(handlers.RestoreGCPVersion))
+	mux.HandleFunc("/api/gcp/bucket/version/delete", protect(handlers.DeleteGCPVersion))
+	mux.HandleFunc("/api/gcp/buckets/list", protect(handlers.ListGCPBuckets))
+	mux.HandleFunc("/api/gcp/buckets/create", protect(handlers.CreateGCPBucket))
+	mux.HandleFunc("/api/gcp/buckets/delete", protect(handlers.DeleteGCPBucket))
 
 	// ── AWS ──────────────────────────────────────────────────────
 	mux.HandleFunc("/api/aws/connections", protect(handlers.ListAWS))
@@ -93,6 +107,13 @@ func main() {
 	mux.HandleFunc("/api/aws/bucket/metadata", protect(handlers.GetAWSMetadata))
 	mux.HandleFunc("/api/aws/bucket/metadata/update", protect(handlers.UpdateAWSMetadata))
 	mux.HandleFunc("/api/aws/bucket/delete-prefix", protect(handlers.DeletePrefixAWS))
+	mux.HandleFunc("/api/aws/bucket/presign-upload", protect(handlers.PresignAWSUpload))
+	mux.HandleFunc("/api/aws/bucket/versions", protect(handlers.ListAWSVersions))
+	mux.HandleFunc("/api/aws/bucket/version/restore", protect(handlers.RestoreAWSVersion))
+	mux.HandleFunc("/api/aws/bucket/version/delete", protect(handlers.DeleteAWSVersion))
+	mux.HandleFunc("/api/aws/buckets/list", protect(handlers.ListAWSBuckets))
+	mux.HandleFunc("/api/aws/buckets/create", protect(handlers.CreateAWSBucket))
+	mux.HandleFunc("/api/aws/buckets/delete", protect(handlers.DeleteAWSBucket))
 
 	// ── Huawei OBS ───────────────────────────────────────────────
 	mux.HandleFunc("/api/huawei/connections", protect(handlers.ListHuawei))
@@ -125,6 +146,13 @@ func main() {
 	mux.HandleFunc("/api/alibaba/bucket/metadata", protect(handlers.GetAlibabaMetadata))
 	mux.HandleFunc("/api/alibaba/bucket/metadata/update", protect(handlers.UpdateAlibabaMetadata))
 	mux.HandleFunc("/api/alibaba/bucket/delete-prefix", protect(handlers.DeletePrefixAlibaba))
+	mux.HandleFunc("/api/alibaba/bucket/presign-upload", protect(handlers.PresignAlibabaUpload))
+	mux.HandleFunc("/api/alibaba/bucket/versions", protect(handlers.ListAlibabaVersions))
+	mux.HandleFunc("/api/alibaba/bucket/version/restore", protect(handlers.RestoreAlibabaVersion))
+	mux.HandleFunc("/api/alibaba/bucket/version/delete", protect(handlers.DeleteAlibabaVersion))
+	mux.HandleFunc("/api/alibaba/buckets/list", protect(handlers.ListAlibabaBuckets))
+	mux.HandleFunc("/api/alibaba/buckets/create", protect(handlers.CreateAlibabaBucket))
+	mux.HandleFunc("/api/alibaba/buckets/delete", protect(handlers.DeleteAlibabaBucket))
 
 	// ── Azure Blob Storage ───────────────────────────────────────
 	mux.HandleFunc("/api/azure/connections", protect(handlers.ListAzure))
@@ -141,6 +169,10 @@ func main() {
 	mux.HandleFunc("/api/azure/bucket/metadata", protect(handlers.GetAzureMetadata))
 	mux.HandleFunc("/api/azure/bucket/metadata/update", protect(handlers.UpdateAzureMetadata))
 	mux.HandleFunc("/api/azure/bucket/delete-prefix", protect(handlers.DeletePrefixAzure))
+	mux.HandleFunc("/api/azure/bucket/presign-upload", protect(handlers.PresignAzureUpload))
+	mux.HandleFunc("/api/azure/containers/list", protect(handlers.ListAzureContainers))
+	mux.HandleFunc("/api/azure/containers/create", protect(handlers.CreateAzureContainer))
+	mux.HandleFunc("/api/azure/containers/delete", protect(handlers.DeleteAzureContainer))
 
 	// ── Google Drive ─────────────────────────────────────────────
 	mux.HandleFunc("/api/gdrive/connections", protect(handlers.ListGDrive))

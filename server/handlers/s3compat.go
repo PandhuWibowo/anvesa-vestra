@@ -19,6 +19,7 @@ import (
 	appdb "github.com/PandhuWibowo/oss-portable/db"
 )
 
+
 // S3Provider encapsulates the provider-specific logic for an S3-compatible backend.
 type S3Provider struct {
 	Name       string // e.g. "aws", "alibaba", "huawei", "b2", "do"
@@ -795,6 +796,335 @@ func (p *S3Provider) CreateFolder() http.HandlerFunc {
 			return
 		}
 		jsonOK(w, map[string]string{"name": folderKey})
+	}
+}
+
+// ── Presigned upload URL ──────────────────────────────────────────
+
+// PresignUpload generates a presigned PUT URL for direct client-to-S3 upload.
+func (p *S3Provider) PresignUpload() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			Key          string `json:"key"`
+			ContentType  string `json:"content_type"`
+			ExpiresIn    int64  `json:"expires_in"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Key) == "" {
+			jsonError(w, "key is required", http.StatusBadRequest)
+			return
+		}
+
+		expiry := time.Duration(req.ExpiresIn) * time.Second
+		if expiry <= 0 {
+			expiry = 15 * time.Minute
+		}
+		if expiry > 7*24*time.Hour {
+			expiry = 7 * 24 * time.Hour
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		client, bucket, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		ct := req.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+
+		psClient := s3.NewPresignClient(client)
+		presigned, err := psClient.PresignPutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(bucket),
+			Key:         aws.String(req.Key),
+			ContentType: aws.String(ct),
+		}, func(o *s3.PresignOptions) { o.Expires = expiry })
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, map[string]string{"url": presigned.URL, "method": "PUT"})
+	}
+}
+
+// ── Bucket management ──────────────────────────────────────────────
+
+// ListBuckets lists all buckets accessible with the connection's credentials.
+func (p *S3Provider) ListBuckets() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ConnectionID int64 `json:"connection_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		client, _, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		out, err := client.ListBuckets(ctx, &s3.ListBucketsInput{})
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		type bucketInfo struct {
+			Name      string    `json:"name"`
+			CreatedAt time.Time `json:"created_at"`
+		}
+		buckets := make([]bucketInfo, 0, len(out.Buckets))
+		for _, b := range out.Buckets {
+			info := bucketInfo{}
+			if b.Name != nil {
+				info.Name = *b.Name
+			}
+			if b.CreationDate != nil {
+				info.CreatedAt = *b.CreationDate
+			}
+			buckets = append(buckets, info)
+		}
+		jsonOK(w, buckets)
+	}
+}
+
+// CreateBucket creates a new S3 bucket.
+func (p *S3Provider) CreateBucket() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			BucketName   string `json:"bucket_name"`
+			Region       string `json:"region"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.BucketName) == "" {
+			jsonError(w, "bucket_name is required", http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		client, _, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		input := &s3.CreateBucketInput{
+			Bucket: aws.String(req.BucketName),
+		}
+		if req.Region != "" && req.Region != "us-east-1" {
+			input.CreateBucketConfiguration = &types.CreateBucketConfiguration{
+				LocationConstraint: types.BucketLocationConstraint(req.Region),
+			}
+		}
+
+		if _, err := client.CreateBucket(ctx, input); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, map[string]string{"name": req.BucketName})
+	}
+}
+
+// DeleteBucket deletes an S3 bucket (must be empty).
+func (p *S3Provider) DeleteBucket() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			BucketName   string `json:"bucket_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.BucketName) == "" {
+			jsonError(w, "bucket_name is required", http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		client, _, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if _, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(req.BucketName),
+		}); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ── Object versioning ──────────────────────────────────────────────
+
+// ListVersions lists all versions of an object.
+func (p *S3Provider) ListVersions() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			Object       string `json:"object"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		client, bucket, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		out, err := client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String(req.Object),
+		})
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		type versionInfo struct {
+			VersionID    string    `json:"version_id"`
+			IsLatest     bool      `json:"is_latest"`
+			LastModified time.Time `json:"last_modified"`
+			Size         int64     `json:"size"`
+			ETag         string    `json:"etag"`
+		}
+		versions := make([]versionInfo, 0)
+		for _, v := range out.Versions {
+			if v.Key == nil || *v.Key != req.Object {
+				continue
+			}
+			info := versionInfo{IsLatest: aws.ToBool(v.IsLatest)}
+			if v.VersionId != nil {
+				info.VersionID = *v.VersionId
+			}
+			if v.LastModified != nil {
+				info.LastModified = *v.LastModified
+			}
+			if v.Size != nil {
+				info.Size = *v.Size
+			}
+			if v.ETag != nil {
+				info.ETag = strings.Trim(*v.ETag, `"`)
+			}
+			versions = append(versions, info)
+		}
+		jsonOK(w, versions)
+	}
+}
+
+// RestoreVersion restores a specific version by copying it as the current version.
+func (p *S3Provider) RestoreVersion() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			Object       string `json:"object"`
+			VersionID    string `json:"version_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		client, bucket, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		copySource := fmt.Sprintf("%s/%s?versionId=%s", bucket, url.PathEscape(req.Object), url.QueryEscape(req.VersionID))
+		if _, err := client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:     aws.String(bucket),
+			CopySource: aws.String(copySource),
+			Key:        aws.String(req.Object),
+		}); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, map[string]string{"status": "restored"})
+	}
+}
+
+// DeleteVersion permanently deletes a specific version.
+func (p *S3Provider) DeleteVersion() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ConnectionID int64  `json:"connection_id"`
+			Object       string `json:"object"`
+			VersionID    string `json:"version_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		client, bucket, err := p.getClient(ctx, req.ConnectionID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket:    aws.String(bucket),
+			Key:       aws.String(req.Object),
+			VersionId: aws.String(req.VersionID),
+		}); err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

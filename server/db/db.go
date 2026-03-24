@@ -198,6 +198,12 @@ var migrations = []migration{
 		Version: 1,
 		SQL:     `DROP TABLE IF EXISTS b2_connections; DROP TABLE IF EXISTS do_connections;`,
 	},
+	{
+		Version: 2,
+		SQL: `ALTER TABLE users ADD COLUMN totp_secret TEXT;
+		      ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+		      ALTER TABLE users ADD COLUMN updated_at DATETIME;`,
+	},
 }
 
 func runMigrations() error {

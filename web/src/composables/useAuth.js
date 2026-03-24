@@ -68,6 +68,10 @@ export function useAuth() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Login failed')
+      // 2FA challenge — server hasn't issued a token yet
+      if (data.requires_2fa) {
+        return { requires_2fa: true, user_id: data.user_id }
+      }
       setToken(data.token)
       user.value = { id: data.user_id, username: data.username, role: data.role }
       return true

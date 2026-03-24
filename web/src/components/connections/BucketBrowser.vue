@@ -410,6 +410,12 @@
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
                   </svg>
                 </button>
+                <!-- Versions -->
+                <button v-if="supportsVersioning" class="row-btn" @click.stop="openVersions(entry)" title="Version history">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                </button>
                 <!-- Metadata -->
                 <button class="row-btn" @click.stop="openMeta(entry)" title="Metadata">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -755,6 +761,62 @@
       </div>
     </transition>
 
+    <!-- ── Version history panel ───────────────────────────────── -->
+    <transition name="slide-right">
+      <div v-if="versionsEntry" class="preview-panel">
+        <div class="preview-hd">
+          <span class="preview-hd__name">{{ versionsEntry.display }} — Versions</span>
+          <button class="preview-close" @click="versionsEntry = null">×</button>
+        </div>
+        <div class="preview-body" style="padding:0">
+          <div v-if="versionsLoading" class="preview-unsupported">
+            <div class="base-btn__spinner" style="width:20px;height:20px;border-width:2px"></div>
+          </div>
+          <div v-else-if="versionsError" class="preview-unsupported" style="font-size:12px">{{ versionsError }}</div>
+          <div v-else-if="!versions.length" class="preview-unsupported">
+            <p style="font-size:13px;color:var(--text-2)">No versions found.</p>
+            <p style="font-size:11px;color:var(--muted)">Versioning may not be enabled on this bucket.</p>
+          </div>
+          <table v-else class="file-table" style="font-size:12px">
+            <thead>
+              <tr>
+                <th>Version ID</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th style="width:80px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="v in versions" :key="v.version_id || v.generation" class="file-row">
+                <td>
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span v-if="v.is_latest" style="background:var(--accent-bg);color:var(--accent);border-radius:4px;padding:1px 5px;font-size:10px;font-weight:600">current</span>
+                    <code style="font-family:var(--mono);font-size:10px;color:var(--text-2)">{{ (v.version_id || String(v.generation)).slice(0, 16) }}…</code>
+                  </div>
+                </td>
+                <td>{{ formatSize(v.size) }}</td>
+                <td>{{ formatDate(v.last_modified || v.updated) }}</td>
+                <td>
+                  <div style="display:flex;gap:4px">
+                    <button v-if="!v.is_latest" class="row-btn" @click="doRestoreVersion(v)" title="Restore this version" :disabled="versionWorking">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/>
+                      </svg>
+                    </button>
+                    <button v-if="!v.is_latest" class="row-btn danger" @click="doDeleteVersion(v)" title="Delete this version" :disabled="versionWorking">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </transition>
+
     <!-- ── Modals ────────────────────────────────────────────────── -->
 
     <!-- New folder -->
@@ -950,7 +1012,7 @@ const props = defineProps({
 })
 defineEmits(['delete'])
 
-const { browseObjects, getDownloadURL, proxyDownload, presignUrl, zipDownload, deleteObject, copyObject, uploadObjects, uploadObjectWithProgress, deletePrefix, transferObject, watchTransferProgress, getBucketStats, getObjectMetadata, updateObjectMetadata, createFolder: createFolderApi } = useConnections()
+const { browseObjects, getDownloadURL, proxyDownload, presignUrl, zipDownload, deleteObject, copyObject, uploadObjects, uploadObjectWithProgress, deletePrefix, transferObject, watchTransferProgress, getBucketStats, getObjectMetadata, updateObjectMetadata, createFolder: createFolderApi, listVersions, restoreVersion, deleteVersion } = useConnections()
 const toast   = useToast()
 const confirm = useConfirm()
 const { isBookmarked, toggleBookmark }            = useBookmarks()
@@ -1078,6 +1140,14 @@ const PRESIGN_PRESETS   = [
 // ── CLI copy modal ───────────────────────────────────────────────
 const showCliModal = ref(false)
 const cliEntry     = ref(null)
+
+// ── Version history ──────────────────────────────────────────────
+const versionsEntry   = ref(null)
+const versions        = ref([])
+const versionsLoading = ref(false)
+const versionsError   = ref('')
+const versionWorking  = ref(false)
+const supportsVersioning = computed(() => ['aws', 'alibaba', 'gcp'].includes(props.conn.provider))
 
 // ── Zip ─────────────────────────────────────────────────────────
 const zipping = ref(false)
@@ -1951,6 +2021,64 @@ async function saveMeta() {
     toast.error('Save failed: ' + err.message)
   } finally {
     metaSaving.value = false
+  }
+}
+
+// ── Version history ──────────────────────────────────────────────
+async function openVersions(entry) {
+  metaEntry.value    = null
+  previewEntry.value = null
+  versionsEntry.value = entry
+  versions.value      = []
+  versionsError.value = ''
+  versionsLoading.value = true
+  try {
+    versions.value = await listVersions(props.conn.provider, props.conn.id, entry.name)
+  } catch (err) {
+    versionsError.value = 'Failed to load versions: ' + err.message
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+async function doRestoreVersion(v) {
+  if (versionWorking.value) return
+  const versionId = v.version_id || v.generation
+  const ok = await confirm.confirm(
+    `Restore this version? It will become the current version of "${versionsEntry.value?.display}".`,
+    'Restore Version'
+  )
+  if (!ok) return
+  versionWorking.value = true
+  try {
+    await restoreVersion(props.conn.provider, props.conn.id, versionsEntry.value.name, versionId)
+    toast.success('Version restored.')
+    await openVersions(versionsEntry.value)
+    load()
+  } catch (err) {
+    toast.error('Restore failed: ' + err.message)
+  } finally {
+    versionWorking.value = false
+  }
+}
+
+async function doDeleteVersion(v) {
+  if (versionWorking.value) return
+  const versionId = v.version_id || v.generation
+  const ok = await confirm.confirm(
+    `Permanently delete this version? This cannot be undone.`,
+    'Delete Version'
+  )
+  if (!ok) return
+  versionWorking.value = true
+  try {
+    await deleteVersion(props.conn.provider, props.conn.id, versionsEntry.value.name, versionId)
+    toast.success('Version deleted.')
+    await openVersions(versionsEntry.value)
+  } catch (err) {
+    toast.error('Delete failed: ' + err.message)
+  } finally {
+    versionWorking.value = false
   }
 }
 

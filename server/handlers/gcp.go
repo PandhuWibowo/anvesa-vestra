@@ -718,6 +718,400 @@ func UpdateGCPMetadata(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PresignGCPUpload generates a signed PUT URL for direct upload to GCS.
+func PresignGCPUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Key          string `json:"key"`
+		ContentType  string `json:"content_type"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Key) == "" {
+		jsonError(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(creds) == "" {
+		jsonError(w, "service account credentials are required for signed upload URLs", http.StatusBadRequest)
+		return
+	}
+
+	expiry := time.Duration(req.ExpiresIn) * time.Second
+	if expiry <= 0 {
+		expiry = 15 * time.Minute
+	}
+	if expiry > 7*24*time.Hour {
+		expiry = 7 * 24 * time.Hour
+	}
+
+	ct := req.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	signed, err := client.Bucket(bucket).SignedURL(req.Key, &storage.SignedURLOptions{
+		Scheme:      storage.SigningSchemeV4,
+		Method:      "PUT",
+		Expires:     time.Now().Add(expiry),
+		ContentType: ct,
+	})
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"url": signed, "method": "PUT"})
+}
+
+// ListGCPBuckets lists all buckets accessible to the service account.
+func ListGCPBuckets(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Credentials  string `json:"credentials"`
+		ProjectID    string `json:"project_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gcp", req.ConnectionID, "", req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	projectID := req.ProjectID
+	if projectID == "" {
+		// Try to extract from credentials JSON
+		var credsMap map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(creds), &credsMap); jsonErr == nil {
+			if pid, ok := credsMap["project_id"].(string); ok {
+				projectID = pid
+			}
+		}
+	}
+	if projectID == "" {
+		jsonError(w, "project_id is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	type bucketInfo struct {
+		Name      string    `json:"name"`
+		Location  string    `json:"location"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	var buckets []bucketInfo
+
+	it := client.Buckets(ctx, projectID)
+	for {
+		attrs, iterErr := it.Next()
+		if iterErr == iterator.Done {
+			break
+		}
+		if iterErr != nil {
+			jsonError(w, iterErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		buckets = append(buckets, bucketInfo{
+			Name:      attrs.Name,
+			Location:  attrs.Location,
+			CreatedAt: attrs.Created,
+		})
+	}
+	if buckets == nil {
+		buckets = []bucketInfo{}
+	}
+	jsonOK(w, buckets)
+}
+
+// CreateGCPBucket creates a new GCS bucket.
+func CreateGCPBucket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Credentials  string `json:"credentials"`
+		ProjectID    string `json:"project_id"`
+		BucketName   string `json:"bucket_name"`
+		Location     string `json:"location"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.BucketName) == "" || strings.TrimSpace(req.ProjectID) == "" {
+		jsonError(w, "bucket_name and project_id are required", http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gcp", req.ConnectionID, "", req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	loc := req.Location
+	if loc == "" {
+		loc = "US"
+	}
+	if err := client.Bucket(req.BucketName).Create(ctx, req.ProjectID, &storage.BucketAttrs{Location: loc}); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"name": req.BucketName})
+}
+
+// DeleteGCPBucket deletes a GCS bucket.
+func DeleteGCPBucket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Credentials  string `json:"credentials"`
+		BucketName   string `json:"bucket_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.BucketName) == "" {
+		jsonError(w, "bucket_name is required", http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("gcp", req.ConnectionID, "", req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	if err := client.Bucket(req.BucketName).Delete(ctx); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListGCPVersions lists all generations (versions) of an object.
+func ListGCPVersions(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	type versionInfo struct {
+		Generation   int64     `json:"generation"`
+		Size         int64     `json:"size"`
+		Updated      time.Time `json:"updated"`
+		ContentType  string    `json:"content_type"`
+		IsLatest     bool      `json:"is_latest"`
+	}
+
+	it := client.Bucket(bucket).Objects(ctx, &storage.Query{
+		Prefix:   req.Object,
+		Versions: true,
+	})
+
+	var versions []versionInfo
+	var latestGen int64
+	for {
+		attrs, iterErr := it.Next()
+		if iterErr == iterator.Done {
+			break
+		}
+		if iterErr != nil {
+			jsonError(w, iterErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if attrs.Name != req.Object {
+			continue
+		}
+		if attrs.Generation > latestGen {
+			latestGen = attrs.Generation
+		}
+		versions = append(versions, versionInfo{
+			Generation:  attrs.Generation,
+			Size:        attrs.Size,
+			Updated:     attrs.Updated,
+			ContentType: attrs.ContentType,
+		})
+	}
+	// Mark latest
+	for i := range versions {
+		versions[i].IsLatest = versions[i].Generation == latestGen
+	}
+	if versions == nil {
+		versions = []versionInfo{}
+	}
+	jsonOK(w, versions)
+}
+
+// RestoreGCPVersion restores an object to a previous generation.
+func RestoreGCPVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
+		Generation   int64  `json:"generation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	src := client.Bucket(bucket).Object(req.Object).Generation(req.Generation)
+	dst := client.Bucket(bucket).Object(req.Object)
+	if _, err := dst.CopierFrom(src).Run(ctx); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "restored"})
+}
+
+// DeleteGCPVersion permanently deletes a specific generation.
+func DeleteGCPVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Object       string `json:"object"`
+		Generation   int64  `json:"generation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("gcp", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client, err := gcpClient(ctx, creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	if err := client.Bucket(bucket).Object(req.Object).Generation(req.Generation).Delete(ctx); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // CreateFolderGCP creates an empty "folder" object (zero-byte object with trailing slash).
 func CreateFolderGCP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
