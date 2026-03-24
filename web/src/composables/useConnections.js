@@ -247,28 +247,6 @@ export function useConnections() {
     return es
   }
 
-  function uploadObjectWithProgress(provider, connectionId, prefix, file, onProgress) {
-    return new Promise((resolve, reject) => {
-      const form = new FormData()
-      form.append('connection_id', String(connectionId))
-      form.append('prefix',      prefix)
-      form.append('file',        file)
-      const xhr = new XMLHttpRequest()
-      xhr.upload.addEventListener('progress', e => {
-        if (e.lengthComputable) onProgress?.(e.loaded / e.total)
-      })
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve()
-        else reject(new Error(xhr.responseText || `HTTP ${xhr.status}`))
-      })
-      xhr.addEventListener('error', () => reject(new Error('Network error')))
-      xhr.open('POST', BASE[provider] + '/bucket/upload')
-      const auth = authHeaders()
-      if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization)
-      xhr.send(form)
-    })
-  }
-
   async function getBucketStats(provider, connectionId) {
     const res = await fetch(BASE[provider] + '/bucket/stats', {
       method:  'POST',
@@ -323,6 +301,166 @@ export function useConnections() {
     return res.json()
   }
 
+  // ── presigned upload ─────────────────────────────────────────
+
+  async function getPresignedUploadUrl(provider, connectionId, key, contentType, expiresIn = 900) {
+    const supportedProviders = ['aws', 'alibaba', 'gcp', 'azure']
+    if (!supportedProviders.includes(provider)) return null
+    try {
+      const res = await fetch(BASE[provider] + '/bucket/presign-upload', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body:    JSON.stringify({ connection_id: connectionId, key, content_type: contentType, expires_in: expiresIn }),
+      })
+      if (!res.ok) return null
+      return res.json() // { url, method }
+    } catch {
+      return null
+    }
+  }
+
+  // Upload with presigned URL for large files (> 50MB), fallback to proxy upload
+  function uploadObjectWithProgress(provider, connectionId, prefix, file, onProgress) {
+    const PRESIGN_THRESHOLD = 50 * 1024 * 1024 // 50MB
+    const key = prefix + file.name
+    const ct = file.type || 'application/octet-stream'
+
+    if (file.size > PRESIGN_THRESHOLD && ['aws', 'alibaba', 'gcp', 'azure'].includes(provider)) {
+      return (async () => {
+        const presign = await getPresignedUploadUrl(provider, connectionId, key, ct)
+        if (presign?.url) {
+          return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest()
+            xhr.upload.addEventListener('progress', e => {
+              if (e.lengthComputable) onProgress?.(e.loaded / e.total)
+            })
+            xhr.addEventListener('load', () => {
+              if (xhr.status >= 200 && xhr.status < 300) resolve()
+              else reject(new Error(`Upload failed: HTTP ${xhr.status}`))
+            })
+            xhr.addEventListener('error', () => reject(new Error('Network error during upload')))
+            xhr.open(presign.method || 'PUT', presign.url)
+            xhr.setRequestHeader('Content-Type', ct)
+            xhr.send(file)
+          })
+        }
+        // fallback to proxy upload
+        return proxyUpload(provider, connectionId, prefix, file, onProgress)
+      })()
+    }
+    return proxyUpload(provider, connectionId, prefix, file, onProgress)
+  }
+
+  function proxyUpload(provider, connectionId, prefix, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const form = new FormData()
+      form.append('connection_id', String(connectionId))
+      form.append('prefix',      prefix)
+      form.append('file',        file)
+      const xhr = new XMLHttpRequest()
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) onProgress?.(e.loaded / e.total)
+      })
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve()
+        else reject(new Error(xhr.responseText || `HTTP ${xhr.status}`))
+      })
+      xhr.addEventListener('error', () => reject(new Error('Network error')))
+      xhr.open('POST', BASE[provider] + '/bucket/upload')
+      const auth = authHeaders()
+      if (auth.Authorization) xhr.setRequestHeader('Authorization', auth.Authorization)
+      xhr.send(form)
+    })
+  }
+
+  // ── bucket management ────────────────────────────────────────
+
+  async function listBuckets(provider, connectionId) {
+    const endpoint = provider === 'azure'
+      ? '/api/azure/containers/list'
+      : `/api/${provider}/buckets/list`
+    const res = await fetch(endpoint, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify({ connection_id: connectionId }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async function createBucket(provider, connectionId, bucketName, opts = {}) {
+    const endpoint = provider === 'azure'
+      ? '/api/azure/containers/create'
+      : `/api/${provider}/buckets/create`
+    const body = provider === 'azure'
+      ? { connection_id: connectionId, container_name: bucketName }
+      : { connection_id: connectionId, bucket_name: bucketName, ...opts }
+    const res = await fetch(endpoint, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async function deleteBucket(provider, connectionId, bucketName) {
+    const endpoint = provider === 'azure'
+      ? '/api/azure/containers/delete'
+      : `/api/${provider}/buckets/delete`
+    const body = provider === 'azure'
+      ? { connection_id: connectionId, container_name: bucketName }
+      : { connection_id: connectionId, bucket_name: bucketName }
+    const res = await fetch(endpoint, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify(body),
+    })
+    if (res.status === 204) return
+    if (!res.ok) throw new Error(await res.text())
+  }
+
+  // ── versioning ───────────────────────────────────────────────
+
+  async function listVersions(provider, connectionId, object) {
+    if (!['aws', 'alibaba', 'gcp'].includes(provider)) {
+      throw new Error('Versioning is only supported for AWS S3, Alibaba OSS, and Google Cloud Storage')
+    }
+    const res = await fetch(BASE[provider] + '/bucket/versions', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify({ connection_id: connectionId, object }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async function restoreVersion(provider, connectionId, object, versionId) {
+    const body = provider === 'gcp'
+      ? { connection_id: connectionId, object, generation: versionId }
+      : { connection_id: connectionId, object, version_id: versionId }
+    const res = await fetch(BASE[provider] + '/bucket/version/restore', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async function deleteVersion(provider, connectionId, object, versionId) {
+    const body = provider === 'gcp'
+      ? { connection_id: connectionId, object, generation: versionId }
+      : { connection_id: connectionId, object, version_id: versionId }
+    const res = await fetch(BASE[provider] + '/bucket/version/delete', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body:    JSON.stringify(body),
+    })
+    if (res.status === 204) return
+    if (!res.ok) throw new Error(await res.text())
+  }
+
   return {
     connections, loading, testing, saving, error, notice,
     fetchConnections, testConnection, saveConnection, updateConnection,
@@ -333,5 +471,8 @@ export function useConnections() {
     getBucketStats, listObjects,
     getObjectMetadata, updateObjectMetadata,
     createFolder, watchTransferProgress,
+    getPresignedUploadUrl,
+    listBuckets, createBucket, deleteBucket,
+    listVersions, restoreVersion, deleteVersion,
   }
 }

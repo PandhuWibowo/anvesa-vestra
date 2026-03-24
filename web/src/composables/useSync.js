@@ -56,10 +56,9 @@ export function useSync() {
   }
 
   async function runSyncJob(id) {
-    const res = await fetch(`/api/sync/${id}`, {
-      method: 'PUT',
+    const res = await fetch(`/api/sync/${id}/run`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ status: 'running' }),
     })
     const body = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(body.error || 'Failed to run sync job')

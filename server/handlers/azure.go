@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	azcontainer "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
@@ -890,6 +891,254 @@ func UpdateAzureMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PresignAzureUpload generates a SAS URL for direct client-to-Azure upload.
+func PresignAzureUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Bucket       string `json:"bucket"`
+		Credentials  string `json:"credentials"`
+		Key          string `json:"key"`
+		ContentType  string `json:"content_type"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Key) == "" {
+		jsonError(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	bucket, creds, err := resolveProviderCreds("azure", req.ConnectionID, req.Bucket, req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sharedKeyCred, err := azureCred(accountName, accountKey)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	expiry := time.Duration(req.ExpiresIn) * time.Second
+	if expiry <= 0 {
+		expiry = 15 * time.Minute
+	}
+	if expiry > 7*24*time.Hour {
+		expiry = 7 * 24 * time.Hour
+	}
+
+	ct := req.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+
+	start := time.Now().UTC().Add(-time.Minute)
+	expiryTime := start.Add(expiry)
+
+	sasQueryParams, err := sas.BlobSignatureValues{
+		Protocol:      sas.ProtocolHTTPS,
+		StartTime:     start,
+		ExpiryTime:    expiryTime,
+		Permissions:   to_string(sas.BlobPermissions{Create: true, Write: true}),
+		ContainerName: bucket,
+		BlobName:      req.Key,
+	}.SignWithSharedKey(sharedKeyCred)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sasURL := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s?%s",
+		accountName, bucket, req.Key, sasQueryParams.Encode())
+	jsonOK(w, map[string]string{"url": sasURL, "method": "PUT"})
+}
+
+func to_string(p sas.BlobPermissions) string { return p.String() }
+
+// ListAzureContainers lists all containers in the storage account.
+func ListAzureContainers(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConnectionID int64  `json:"connection_id"`
+		Credentials  string `json:"credentials"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_, creds, err := resolveProviderCreds("azure", req.ConnectionID, "", req.Credentials)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	serviceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", accountName)
+	cred, credErr := azblob.NewSharedKeyCredential(accountName, accountKey)
+	if credErr != nil {
+		jsonError(w, credErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	serviceClient, svcErr := azblob.NewClientWithSharedKeyCredential(serviceURL, cred, nil)
+	if svcErr != nil {
+		jsonError(w, svcErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	type containerInfo struct {
+		Name string `json:"name"`
+	}
+	var containers []containerInfo
+
+	pager := serviceClient.NewListContainersPager(nil)
+	for pager.More() {
+		page, pageErr := pager.NextPage(ctx)
+		if pageErr != nil {
+			jsonError(w, pageErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, c := range page.ContainerItems {
+			if c.Name != nil {
+				containers = append(containers, containerInfo{Name: *c.Name})
+			}
+		}
+	}
+	if containers == nil {
+		containers = []containerInfo{}
+	}
+	jsonOK(w, containers)
+}
+
+// CreateAzureContainer creates a new Azure Blob Storage container.
+func CreateAzureContainer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID  int64  `json:"connection_id"`
+		Credentials   string `json:"credentials"`
+		ContainerName string `json:"container_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.ContainerName) == "" {
+		jsonError(w, "container_name is required", http.StatusBadRequest)
+		return
+	}
+
+	var creds string
+	if req.ConnectionID > 0 {
+		var resolveErr error
+		_, creds, resolveErr = resolveProviderCreds("azure", req.ConnectionID, "", req.Credentials)
+		if resolveErr != nil {
+			jsonError(w, resolveErr.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		creds = req.Credentials
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	containerClient, _, err := azureContainerClient(accountName, accountKey, req.ContainerName)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := containerClient.Create(ctx, nil); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]string{"name": req.ContainerName})
+}
+
+// DeleteAzureContainer deletes an Azure Blob Storage container.
+func DeleteAzureContainer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ConnectionID  int64  `json:"connection_id"`
+		Credentials   string `json:"credentials"`
+		ContainerName string `json:"container_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.ContainerName) == "" {
+		jsonError(w, "container_name is required", http.StatusBadRequest)
+		return
+	}
+
+	var creds string
+	if req.ConnectionID > 0 {
+		var resolveErr error
+		_, creds, resolveErr = resolveProviderCreds("azure", req.ConnectionID, "", req.Credentials)
+		if resolveErr != nil {
+			jsonError(w, resolveErr.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		creds = req.Credentials
+	}
+
+	accountName, accountKey, err := azureCredsFromJSON(creds)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	containerClient, _, err := azureContainerClient(accountName, accountKey, req.ContainerName)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := containerClient.Delete(ctx, nil); err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

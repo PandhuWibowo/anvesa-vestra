@@ -11,14 +11,41 @@
         </div>
       </div>
 
-      <h2 class="auth-title">{{ setupRequired ? 'Create Admin Account' : 'Sign In' }}</h2>
+      <h2 class="auth-title">{{ totpChallenge ? 'Two-Factor Auth' : setupRequired ? 'Create Admin Account' : 'Sign In' }}</h2>
       <p class="auth-sub">
-        {{ setupRequired
+        {{ totpChallenge
+          ? 'Enter the 6-digit code from your authenticator app.'
+          : setupRequired
           ? 'Set up your admin account to get started.'
           : 'Enter your credentials to continue.' }}
       </p>
 
-      <form @submit.prevent="handleSubmit" class="auth-form">
+      <!-- 2FA challenge form -->
+      <form v-if="totpChallenge" @submit.prevent="handleTotpChallenge" class="auth-form">
+        <div class="auth-field">
+          <label class="auth-label" for="auth-totp">Authenticator Code</label>
+          <input
+            id="auth-totp"
+            ref="totpInput"
+            class="auth-input"
+            v-model="totpCode"
+            type="text"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder="000000"
+            maxlength="6"
+            required
+          />
+        </div>
+        <p v-if="localError" class="auth-error">{{ localError }}</p>
+        <button class="auth-submit" type="submit" :disabled="authLoading || totpCode.length !== 6">
+          {{ authLoading ? 'Verifying…' : 'Verify' }}
+        </button>
+        <button type="button" class="auth-back" @click="totpChallenge = null; totpCode = ''">← Back to login</button>
+      </form>
+
+      <!-- Normal login / register form -->
+      <form v-else @submit.prevent="handleSubmit" class="auth-form">
         <div class="auth-field">
           <label class="auth-label" for="auth-user">Username</label>
           <input
@@ -88,12 +115,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useAuth } from '../../composables/useAuth.js'
 
 const { setupRequired, authLoading, authError, register, login } = useAuth()
 
 const oauthProviders = ref(null)
+const totpChallenge = ref(null) // { user_id }
+const totpCode = ref('')
+const totpInput = ref(null)
 
 onMounted(async () => {
   try {
@@ -144,7 +174,39 @@ async function handleSubmit() {
     }
     await register(username.value, password.value)
   } else {
-    await login(username.value, password.value)
+    const result = await login(username.value, password.value)
+    // Handle 2FA challenge
+    if (result?.requires_2fa) {
+      totpChallenge.value = { user_id: result.user_id }
+      totpCode.value = ''
+      localError.value = ''
+      await nextTick()
+      totpInput.value?.focus()
+    }
+  }
+}
+
+async function handleTotpChallenge() {
+  localError.value = ''
+  if (!totpChallenge.value || totpCode.value.length !== 6) return
+  try {
+    const res = await fetch('/api/auth/2fa/challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: totpChallenge.value.user_id, code: totpCode.value }),
+    })
+    if (!res.ok) {
+      localError.value = 'Invalid code. Please try again.'
+      totpCode.value = ''
+      totpInput.value?.focus()
+      return
+    }
+    const data = await res.json()
+    // Use the auth composable to set the token
+    localStorage.setItem('auth_token', data.token)
+    window.location.reload()
+  } catch (err) {
+    localError.value = 'Verification failed: ' + err.message
   }
 }
 </script>
@@ -314,4 +376,16 @@ async function handleSubmit() {
   background: var(--surface-2);
 }
 .auth-oauth-btn--github svg { color: var(--text); }
+
+.auth-back {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+  transition: color .15s;
+}
+.auth-back:hover { color: var(--text-2); }
 </style>

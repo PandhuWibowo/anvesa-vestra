@@ -164,6 +164,10 @@ func createSyncJob(w http.ResponseWriter, r *http.Request) {
 
 // SyncJobByID handles GET/PUT/DELETE for /api/sync/{id}.
 func SyncJobByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/run") {
+		RunSyncJob(w, r)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		getSyncJob(w, r)

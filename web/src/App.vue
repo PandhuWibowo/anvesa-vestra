@@ -139,6 +139,12 @@
       <!-- Users -->
       <UsersView v-else-if="mode === 'users'" />
 
+      <!-- 2FA Settings -->
+      <TwoFactorView v-else-if="mode === '2fa'" />
+
+      <!-- Bucket Management -->
+      <BucketManagementView v-else-if="mode === 'buckets'" :connections="connections" />
+
     </main>
 
     <!-- Activity panel (slides in over right edge) -->
@@ -170,7 +176,9 @@ import JobsView          from './components/views/JobsView.vue'
 import WebhooksView      from './components/views/WebhooksView.vue'
 import NotificationsView from './components/views/NotificationsView.vue'
 import SyncView          from './components/views/SyncView.vue'
-import UsersView         from './components/views/UsersView.vue'
+import UsersView              from './components/views/UsersView.vue'
+import TwoFactorView          from './components/views/TwoFactorView.vue'
+import BucketManagementView   from './components/views/BucketManagementView.vue'
 import ShortcutModal     from './components/ui/ShortcutModal.vue'
 import { useConnections } from './composables/useConnections.js'
 import { useAuth }        from './composables/useAuth.js'
@@ -209,7 +217,7 @@ function restoreNavState() {
     const raw = localStorage.getItem('anveesa-nav')
     if (!raw) return
     const state = JSON.parse(raw)
-    const restorable = ['browse', 'docs', 'dashboard', 'search', 'shared', 'audit', 'jobs', 'webhooks', 'notifications', 'sync', 'users']
+    const restorable = ['browse', 'docs', 'dashboard', 'search', 'shared', 'audit', 'jobs', 'webhooks', 'notifications', 'sync', 'users', '2fa', 'buckets']
     if (!restorable.includes(state.mode)) return
     if (state.mode === 'browse' && state.connProvider != null && state.connId != null) {
       const conn = connections.value.find(

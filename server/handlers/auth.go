@@ -110,9 +110,10 @@ func LoginHandler(jwtSecret string, jwtExpiry time.Duration) http.HandlerFunc {
 
 		var userID int64
 		var passwordHash, role string
+		var totpEnabled int
 		err := appdb.DB.QueryRow(
-			"SELECT id, password_hash, role FROM users WHERE username = ?", req.Username,
-		).Scan(&userID, &passwordHash, &role)
+			"SELECT id, password_hash, role, COALESCE(totp_enabled, 0) FROM users WHERE username = ?", req.Username,
+		).Scan(&userID, &passwordHash, &role, &totpEnabled)
 		if err != nil {
 			jsonError(w, "invalid username or password", http.StatusUnauthorized)
 			return
@@ -120,6 +121,15 @@ func LoginHandler(jwtSecret string, jwtExpiry time.Duration) http.HandlerFunc {
 
 		if !crypto.CheckPassword(req.Password, passwordHash) {
 			jsonError(w, "invalid username or password", http.StatusUnauthorized)
+			return
+		}
+
+		// If 2FA is enabled, return a challenge instead of a token
+		if totpEnabled == 1 {
+			jsonOK(w, map[string]any{
+				"requires_2fa": true,
+				"user_id":      userID,
+			})
 			return
 		}
 
