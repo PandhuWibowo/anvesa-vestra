@@ -165,6 +165,7 @@ Most cloud consoles are built for administrators, not daily users. They are slow
 - [API Reference](./api-reference.md) — complete REST API for the backend
 - [Deployment](./deployment.md) — build, configure, and run in production
 - [Contributing](./contributing.md) — local development and project structure
+- [Donation](./DONATION.md) — bank transfer and PayPal support options
 
 ---
 

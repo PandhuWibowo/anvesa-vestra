@@ -75,6 +75,20 @@ Full documentation lives in [`docs/`](./docs/) and is also available in-app via 
 | [API Reference](./docs/api-reference.md) | Complete REST API (104 endpoints) |
 | [Deployment](./docs/deployment.md) | Docker, binary, systemd, env vars |
 | [Contributing](./docs/contributing.md) | Local dev setup, conventions, adding providers |
+| [Donation](./docs/DONATION.md) | Bank transfer and PayPal support options |
+
+---
+
+## Donations
+
+If Anveesa Vestra is useful for you and you are in Indonesia, donations can be sent by bank transfer:
+
+| Bank | Account Name | Account Number |
+| --- | --- | --- |
+| BCA | Pandhu Wibowo | `6043081611` |
+| BNI | Pandhu Wibowo | `1487723030` |
+
+PayPal: <https://www.paypal.com/paypalme/pandhuwibowo>
 
 ---
 

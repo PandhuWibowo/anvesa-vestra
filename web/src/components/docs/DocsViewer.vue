@@ -41,6 +41,7 @@ import management      from '../../../../docs/management.md?raw'
 import apiReference    from '../../../../docs/api-reference.md?raw'
 import deployment      from '../../../../docs/deployment.md?raw'
 import contributing    from '../../../../docs/contributing.md?raw'
+import donation        from '../../../../docs/DONATION.md?raw'
 
 const docMap = {
   'index':           indexMd,
@@ -53,6 +54,7 @@ const docMap = {
   'api-reference':   apiReference,
   'deployment':      deployment,
   'contributing':    contributing,
+  'donation':        donation,
 }
 
 const pages = [
@@ -106,6 +108,11 @@ const pages = [
     label: 'Contributing',
     icon: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
   },
+  {
+    id: 'donation',
+    label: 'Donation',
+    icon: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
+  },
 ]
 
 const current    = ref('index')
@@ -134,10 +141,10 @@ function handleLinkClick(e) {
   if (!a) return
   const href = a.getAttribute('href')
   if (!href) return
-  const match = href.match(/(?:\.\/)?([a-z-]+)\.md$/)
+  const match = href.match(/(?:\.\/)?([A-Za-z-]+)\.md$/)
   if (match) {
     e.preventDefault()
-    navigate(match[1])
+    navigate(match[1].toLowerCase())
   } else if (href.startsWith('http')) {
     e.preventDefault()
     window.open(href, '_blank', 'noopener')
